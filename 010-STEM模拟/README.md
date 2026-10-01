@@ -274,7 +274,7 @@ notes 中说明；`stem_tool/main.py` 已带守卫。
 | 版本来源 | `stem_sim/__init__.py` |
 | 入口 | `run.bat` |
 | 依赖锁定 | `requirements.lock.txt` |
-| 许可证 | MIT |
+| 许可证 | MIT（本体代码）；`stem_sim/data/peng_high.json` 取自 abTEM（GPL-3.0），见根 [NOTICE.md](../NOTICE.md) |
 
 **从源码运行**——必须使用本工具自己的虚拟环境，不要用 PATH 上的 `python`：
 各工具依赖版本互不相同，共用解释器会互相污染。

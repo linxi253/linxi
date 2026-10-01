@@ -5,6 +5,7 @@
 name = "stem-enhancer"
 version = "2.1.0"
 description = "HRTEM/STEM TIFF 图像增强工具（自适应频域降噪）"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=2.2,<3",

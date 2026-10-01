@@ -102,8 +102,17 @@ python -m venv .venv
 [JJPPeters/Strainpp](https://github.com/JJPPeters/Strainpp)，该目录自带 `LICENSE`）。
 GPL-3.0 具传染性：若把它与其余代码打包成**单一作品**分发，整体授权需按 GPL-3.0
 重新审视；仅在同一仓库中并列存放、各自独立分发则不受影响。
+`全整合`（TEM Suite）在运行期以**同进程 `import`** 方式加载 strainpp，
+若两者一起打进同一个 exe 对外分发，请先确认 GPL 合规性。
 
-逐工具的许可证、第三方依赖、以及**未收录的第三方材料**清单见
+**例外：发行 exe 中的 GPL-3.0 第三方组件。** `05-EELS分析/EELS边缘价态分析工具`
+与 `全整合` 的发行 exe 均内含 **`ncempy`（GPL-3.0-or-later）**，
+分发时该组件仍受 GPL-3.0 约束，不因本项目声明 MIT 而改变；
+两者的 `THIRD_PARTY_NOTICES.md` 列明了义务与规避方式。
+另 `09-HRTEM模拟`、`010-STEM模拟` 的 `data/peng_high.json` 取自
+**abTEM（GPL-3.0）**。
+
+逐工具的许可证、第三方依赖、数据文件来源、以及**未收录的第三方材料**清单见
 [NOTICE.md](NOTICE.md)。
 
 ## README 覆盖范围

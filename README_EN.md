@@ -111,9 +111,19 @@ This repository is **MIT** (see [LICENSE](LICENSE)), applying to the original co
 GPL-3.0 is contagious: bundling it with the rest of the code into **a single work** for distribution
 requires re-examining the whole under GPL-3.0; merely hosting them side by side in one repository
 and distributing them independently is unaffected.
+`全整合` (TEM Suite) loads strainpp **in-process via `import`**; if the two are packaged
+into a single executable for distribution, verify GPL compliance first.
 
-Per-tool licenses, third-party dependencies, and third-party material **deliberately not included**
-are listed in [NOTICE.md](NOTICE.md).
+**Exception: GPL-3.0 third-party components inside released executables.**
+The released executables of `05-EELS分析/EELS边缘价态分析工具` and `全整合` both bundle
+**`ncempy` (GPL-3.0-or-later)**. Distribution of those executables remains bound by GPL-3.0
+for that component, regardless of this project's MIT declaration; the obligations and
+workarounds are spelled out in each directory's `THIRD_PARTY_NOTICES.md`.
+Additionally, `data/peng_high.json` in `09-HRTEM模拟` and `010-STEM模拟` comes from
+**abTEM (GPL-3.0)**.
+
+Per-tool licenses, third-party dependencies, data-file provenance, and third-party material
+**deliberately not included** are listed in [NOTICE.md](NOTICE.md).
 
 ## README Coverage
 
