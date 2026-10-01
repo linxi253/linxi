@@ -1,0 +1,44 @@
+# ============================================================
+# YOLOv8 原子检测 — 超参数配置 (16GB 显存优化)
+# ============================================================
+
+# ---- 损失函数权重 ----
+box: 12.0        # 边界框回归损失 (提高权重: 原子框小，定位精度关键)
+cls: 0.5         # 分类损失 (单类别，权重可降低)
+dfl: 2.0         # Distribution Focal Loss (提升边界框精度)
+
+# ---- 学习率 ----
+lr0: 0.01        # 初始学习率
+lrf: 0.01        # 最终学习率比例 (lr0 * lrf)
+warmup_epochs: 5 # 预热轮数
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# ---- 优化器 ----
+optimizer: "AdamW"
+weight_decay: 0.0005
+momentum: 0.937
+
+# ---- 数据增强 (针对 HRTEM 原子图) ----
+# 安全增强
+fliplr: 0.5      # 水平翻转概率
+flipud: 0.5      # 垂直翻转概率
+degrees: 5.0     # 旋转角度范围 (小角度，保持晶格方向)
+scale: 0.1       # 缩放范围 +-10%
+translate: 0.05  # 平移范围
+# 灰度亮度/对比度配置已迁移到 atom-center 的 augmentation，不能传入 Ultralytics。
+
+# 禁用不适合原子图的增强
+mosaic: 0.0      # Mosaic 破坏周期性晶格结构
+mixup: 0.0       # MixUp 混合不适合点状目标
+copy_paste: 0.0  # Copy-Paste 不适合
+shear: 0.0       # 剪切破坏晶格对称性
+perspective: 0.0 # 透视变换不适合平面样品
+hsv_h: 0.0       # 灰度图无需色相增强
+hsv_s: 0.0       # 灰度图无需饱和度增强
+hsv_v: 0.0       # 用 brightness 代替
+
+# ---- 训练策略 ----
+cos_lr: true     # 余弦退火学习率
+close_mosaic: 0  # 已禁用 mosaic
+nbs: 64          # 名义 batch size (自动梯度累积)

@@ -1,0 +1,25 @@
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments and package metadata
+.venv/
+venv/
+*.egg-info/
+
+# PyInstaller products (the spec file remains tracked)
+build/
+build-*/
+dist/
+dist-*/
+
+# Editor and OS files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

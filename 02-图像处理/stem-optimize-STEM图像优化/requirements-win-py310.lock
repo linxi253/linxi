@@ -1,0 +1,15 @@
+# Windows x64 / CPython 3.10 reproducible runtime lock.
+# Install with:
+#   python -m pip install --require-hashes -r requirements-win-py310.lock
+defusedxml==0.7.1 \
+    --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
+imagecodecs==2024.12.30 \
+    --hash=sha256:7d799518ea5a5fa245ba3c4e43edf86ac8fdbcae5a3d1de22c19120aaf426390
+numpy==2.2.6 \
+    --hash=sha256:f0fd6321b839904e15c46e0d257fdd101dd7f530fe03fd6359c1ea63738703f3
+opencv-python-headless==4.12.0.88 \
+    --hash=sha256:86b413bdd6c6bf497832e346cd5371995de148e579b9774f8eba686dee3f5528
+scipy==1.15.3 \
+    --hash=sha256:9d61e97b186a57350f6d6fd72640f9e99d5a4a2b8fbf4b9ee9a841eab327dc13
+tifffile==2025.5.10 \
+    --hash=sha256:e37147123c0542d67bc37ba5cdd67e12ea6fbe6e86c52bee037a9eb6a064e5ad

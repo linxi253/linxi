@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eels-edge-analyzer"
+version = "0.2.0"
+description = "Dual-EELS sample-edge oxidation-state analysis for DM3/DM4 spectrum images"
+requires-python = ">=3.10"
+dependencies = [
+    # 代码使用 np.trapezoid（NumPy 2.0 引入的 API），因此下界必须为 2.0。
+    "numpy>=2.0,<3",
+    "scipy>=1.10,<2",
+    "matplotlib>=3.7,<4",
+    "ncempy>=1.16",
+]
+
+[project.scripts]
+eels-edge = "eels_edge_analyzer.cli:main"
+eels-edge-gui = "eels_edge_analyzer.gui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+eels_edge_analyzer = ["presets/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

@@ -1,0 +1,10 @@
+Bundled font: NotoSansCJKsc-AtomAnnotator.otf (unmodified upstream font)
+Upstream: NotoSansCJKsc-Regular.otf, Noto Sans CJK 2.004
+Source: https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
+Upstream SHA-256: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
+Bundled SHA-256: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
+License: SIL Open Font License 1.1; see OFL.txt in this directory.
+
+The complete Simplified Chinese font is bundled so arbitrary Chinese task names,
+file paths, metadata, and future user-interface text remain readable on Windows
+installations that do not have an optional CJK font pack.

@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态检查：跑在 Linux 上，无需任何项目依赖，几秒完成
+  # ---------------------------------------------------------------------------
+  lint:
+    name: lint & compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+
+      - name: Ruff lint
+        # 只挑「真错误」：E9 语法/运行时、F63 无效 __all__、F7 类型注释语法、F82 未定义名。
+        # 不跑 ruff 默认全量规则集：各子项目自带 [tool.ruff] 配置，全量会累计数千条既有
+        # 风格告警（UP006/I001/BLE001…），不适合在引入 CI 的第一步就全部卡红。
+        #
+        # 注意：ruff 会把 `x=1;match=y` 误判为 E999（把 match 当软关键字语句），这是 ruff
+        # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法。真语法错误由下面的
+        # compileall（CPython 解析器）兜底。
+        run: ruff check --select E9,F63,F7,F82 --output-format=github .
+
+      - name: Compile all sources
+        run: python -m compileall -q -x '(^|/)(\.venv|build|dist|release|legacy|wheelhouse)/' .
+
+  # ---------------------------------------------------------------------------
+  # 逐子项目测试。跑在 Windows 上：这些工具是 Windows 桌面 GUI 程序，测试套件
+  # 本身就按 Windows 语义编写（大小写不敏感路径、win-py310 锁文件、Tk 原生可用），
+  # 放到 Linux 会产生与代码无关的假失败。
+  # ---------------------------------------------------------------------------
+  test:
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true }
+          - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7' }
+          - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具' }
+          # 该项目的锁文件是 Windows + CPython 3.10 + --require-hashes，必须用 3.10
+          - { name: '02 STEM 图像优化',    dir: '02-图像处理/stem-optimize-STEM图像优化', py: '3.10' }
+          - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具' }
+          - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具' }
+          - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析' }
+          # 测试导入 yaml，但依赖清单未声明 pyyaml（见下方 "Known gaps"）
+          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', deps: 'pyyaml' }
+          - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法' }
+          - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
+          - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
+          - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
+          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计/pythonProject' }
+          - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor' }
+          - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具' }
+          - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟' }
+          # tests/ 下是脚本式自检（README 记录 `python tests/verify_physics.py`），
+          # 函数靠返回值串联，pytest 无法收集（会报 fixture 'pl' not found）
+          - { name: '010 STEM 模拟',      dir: '010-STEM模拟', test: 'python tests/verify_physics.py' }
+          - { name: '全整合 TEM Suite',    dir: '全整合', test: 'python tests/smoke_test.py' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.py || '3.12' }}
+          cache: pip
+
+      - name: Provide FFmpeg 8.x (required by 视频切片工具, >= 8.0.3)
+        if: matrix.ffmpeg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # BtbN 的 latest 别名指向 8.1 系列，与 tools/ffmpeg/PROVENANCE.md 记录的主线一致
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $inner = Get-ChildItem $extract -Directory | Select-Object -First 1
+          $dest = Join-Path '${{ matrix.dir }}' 'tools/ffmpeg'
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Copy-Item (Join-Path $inner.FullName 'bin/ffmpeg.exe') $dest -Force
+          Copy-Item (Join-Path $inner.FullName 'bin/ffprobe.exe') $dest -Force
+          Copy-Item (Join-Path $inner.FullName 'bin/*.dll') $dest -Force
+          & (Join-Path $dest 'ffmpeg.exe') -version | Select-Object -First 1
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.dir }}
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # 各工具的锁定文件名不统一，按优先级自动探测。
+          # requirements-win-py310.lock 是 Windows 原生锁（含哈希），优先使用。
+          $lock = @(
+            'requirements-win-py310.lock', 'requirements.lock.txt', 'requirements.lock',
+            'requirements-lock.txt', 'requirements.txt'
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          Write-Host "using requirements: $lock"
+          if ($lock) { python -m pip install -r $lock }
+          python -m pip install pytest ${{ matrix.deps }}
+
+      - name: Run tests
+        working-directory: ${{ matrix.dir }}
+        env:
+          # GitHub Windows runner 的 TEMP 默认是 8.3 短名（C:\Users\RUNNER~1\AppData\Local\Temp），
+          # 会让「保存的路径 vs 真实路径」这类比较出现长短名不一致而假失败。
+          # runner.temp 是 D:\a\_temp，各段都短于 8 字符，不会产生短名别名。
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: ${{ matrix.test || 'python -m pytest -q' }}
+
+# Known gaps found by this workflow (not fixed here — see repository issues):
+#   1. 03-应变分析/原子级应力分析-PPA 的测试导入 yaml，但 requirements*.txt / lock 均未声明 pyyaml。
+#   2. 010-STEM模拟/tests/test_e2e_au.py 用 test_* 命名但不具 pytest 结构（函数间靠返回值串联），
+#      故 CI 改跑 README 记录的 tests/verify_physics.py。

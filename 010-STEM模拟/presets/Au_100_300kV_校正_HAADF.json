@@ -1,0 +1,26 @@
+{
+  "cif_path": "../cif/Au_fcc_Fm-3m.cif",
+  "zone": [
+    1,
+    0,
+    0
+  ],
+  "thickness_nm": 10.0,
+  "scan_fov_nm": 2.0,
+  "scan_points": 40,
+  "voltage_kv": 300.0,
+  "cs_mm": 0.01,
+  "defocus_nm": -4.44,
+  "probe_semiangle_mrad": 25.0,
+  "detector_inner_mrad": 50.0,
+  "detector_outer_mrad": 100.0,
+  "n_phonons": 8,
+  "temperature_k": 300.0,
+  "sampling_a": 0.0,
+  "slice_thickness_a": 2.5,
+  "parallel": "auto",
+  "with_bright_field": true,
+  "display_detector": "ADF",
+  "name": "Au [100] 300kV 校正 HAADF",
+  "_note": "球差校正 300 kV 标准 HAADF：探针 25 mrad、探测器 50–100 mrad。探针离焦取 Scherzer 探针最优值 -1.40 nm；t=10 nm；视场 2 nm。（Cs=0.01 mm=1e5 Å 对应 Scherzer 探针离焦 -4.44 nm、最优探针角 29.8 mrad）"
+}

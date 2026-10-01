@@ -1,0 +1,10 @@
+#!/bin/sh
+# 本地提交防线：静态检查 + 全量回归测试。
+# 启用：git config core.hooksPath .githooks
+set -e
+
+echo "[pre-commit] python -m ruff check ."
+python -m ruff check .
+
+echo "[pre-commit] python -m unittest discover -s tests"
+python -m unittest discover -s tests

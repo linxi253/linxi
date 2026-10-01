@@ -1,0 +1,17 @@
+# 运行依赖（版本锁定为当前打包环境实测版本，保证重打包可复现）
+# 注意：numpy 需 >= 1.22（compute_contrast_stack 使用分位数的 tuple axis）；
+#       requirements 中 numpy==2.2.6 需要 Python >= 3.10。
+numpy==2.2.6
+matplotlib==3.10.9
+tifffile==2025.5.10
+ttkbootstrap==2.0.0
+Pillow==12.3.0
+# LZW 等压缩 TIFF 的解码器：tifffile 自身只内置 zlib（DEFLATE），
+# LZW/PackBits/JPEG 等必须由 imagecodecs 提供。缺少时
+# tests/test_core.py::test_lzw_compressed_falls_back_to_memory 与
+# test_compressed_flag 会失败。此前该依赖被共用 base 环境掩盖，未在清单中声明。
+imagecodecs==2025.3.30
+
+# 测试依赖（pandas 仅用于 smoke_test_gui.py 校验 CSV，运行时不依赖、也不打包）
+pytest>=8.0.0
+pandas==2.3.3

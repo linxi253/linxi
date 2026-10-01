@@ -1,0 +1,21 @@
+# PPA 原子级位移与应变分析工具 - 运行依赖
+#
+# 精确版本见 requirements.lock.txt（自动生成，请勿手改）。
+# 复现运行环境：
+#     python -m venv .venv
+#     .venv\Scripts\python -X utf8 -m pip install -r requirements.lock.txt
+#
+# 说明：本清单对应 pyproject.toml 的 [project].dependencies。
+# 其中 Pillow 未设上限，与同目录 原子识别纯算法 及工作区其它工具保持一致
+# （工作区实测版本为 Pillow 12.3.0）；pyproject.toml 中仍写作 <12，待后续对齐。
+#
+# 可选预处理扩展 butter.py 不属于 pip 依赖：
+# 该文件位于 hrtem-butter 项目内，运行时通过环境变量 PPA_HRTEM_FILTER_DIR 指定其目录。
+numpy>=1.24,<3
+scipy>=1.10,<2
+matplotlib>=3.7,<4
+tifffile>=2023.0
+pillow>=9
+
+# 可选：atom_detector 子模块（深度学习原子检测）需要 torch/ultralytics，
+# 依赖清单见 atom_detector/requirements.txt，与本工具的轻量运行环境相互独立。

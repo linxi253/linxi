@@ -1,0 +1,36 @@
+.venv/
+.runtime/
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+release/
+
+# Local data and generated experiment output
+data/raw/**
+data/processed/**
+data/labels/**
+data/annotation_projects/**
+data/manifests/*_annotations.csv
+runs/**
+reports/**/*.html
+reports/**/*.png
+
+# Model binaries are registered by manifest and SHA-256, not committed directly.
+registry/**/*.pt
+registry/**/*.pth
+registry/**/*.onnx
+registry/**/*.engine
+
+# Editors / OS
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

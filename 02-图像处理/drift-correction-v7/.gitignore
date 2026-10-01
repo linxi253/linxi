@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv-build/
+
+# IDE / 工具自动生成产物
+.qoder/
+.idea/
+.vscode/
+.zcode/
+
+build/
+dist/
+output/
+*.part.tif
+*.part
+drift_batch_report_*.json
+drift_batch_report_*.csv
+*_shifts.csv
+
+# 本地测试数据（test.tif 约 97MB，超过远端仓库单文件限制；verify_refactor.py 本地运行需要）
+# 通配 TIFF 以防其他图像数据误入库；如需版本化小体积参考图，用 git add -f 强制加入。
+*.tif
+*.tiff
+
+# 本地归档快照（旧版 EXE 等），git 历史已可追溯。
+archive/

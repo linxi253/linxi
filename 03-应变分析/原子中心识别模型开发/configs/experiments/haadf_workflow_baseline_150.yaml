@@ -1,0 +1,31 @@
+# Development baseline validated on the existing workflow-validation split.
+# Build with tile-size=640, box-size=8. This is not a scientific release config.
+# Load with --common this-file --modality configs/haadf_stem.yaml.
+seed: 20260909
+augmentation:
+  probability: 0.0
+training:
+  model: yolov8s.yaml
+  epochs: 150
+  patience: 151
+  imgsz: 640
+  batch: 4
+  nbs: 4
+  device: "0"
+  workers: 2
+  warmup_epochs: 0.0
+  save_period: -1
+  degrees: 0.0
+  translate: 0.0
+  scale: 0.0
+  fliplr: 0.0
+  flipud: 0.0
+inference:
+  conf: 0.25
+  iou: 0.45
+  max_det: 4000
+refinement:
+  enabled: true
+  method: com
+  window_size: 7
+  polarity: bright

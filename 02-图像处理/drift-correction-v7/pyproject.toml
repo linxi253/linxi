@@ -1,0 +1,9 @@
+[project]
+name = "tiff-drift-correction"
+version = "7.3.0"
+description = "TIFF stack drift correction with safe I/O and RANSAC-filtered translation registration"
+requires-python = ">=3.10,<3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

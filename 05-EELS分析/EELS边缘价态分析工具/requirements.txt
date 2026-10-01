@@ -1,0 +1,10 @@
+# Runtime dependencies.  These versions are compatible with AIforTEM TEM Suite.
+# numpy>=2.0 is required: the code calls np.trapezoid, which was added in NumPy 2.0.
+numpy>=2.0,<3
+scipy>=1.10,<2
+matplotlib>=3.7,<4
+ncempy>=1.16
+
+# Test/build only:
+# pytest>=8
+# pyinstaller>=6

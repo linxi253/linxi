@@ -1,0 +1,113 @@
+# ── AIforTEM 仓库根 .gitignore ───────────────────────────────────────────────
+# 本仓库只收录各工具的**源码与文档**。可执行文件、模型权重、实验数据和
+# 构建产物一律不入库；如需分发成品程序，请走 GitHub Releases。
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# ── 虚拟环境 ──
+.venv/
+.venv*/
+venv/
+env/
+
+# ── 构建与打包产物 ──
+build/
+build-*/
+dist/
+dist-*/
+release/
+wheelhouse/
+*.spec.bak
+*.pkg
+*.pyz
+*.whl
+*.manifest
+
+# ── 原生二进制与可执行文件 ──
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+*.lib
+*.obj
+*.msi
+*.cab
+*.nupkg
+
+# ── 模型权重与推理引擎 ──
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.engine
+
+# ── 电镜原始数据与图像（体积大，另行存放）──
+*.tif
+*.tiff
+*.dm3
+*.dm4
+*.ser
+*.emd
+*.mrc
+*.raw
+*.bin
+*.mat
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# ── 压缩包与媒体 ──
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.iso
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.mkv
+
+# ── 运行期输出 ──
+output/
+outputs/
+results/
+runs/
+reports/*.html
+reports/*.png
+*.log
+*.ndjson
+*.jsonl
+*.partial
+*.part
+
+# ── 编辑器 / 工具元数据 ──
+.idea/
+.vscode/
+.zcode/
+.codegraph/
+.qoder/
+.omo/
+.claude/settings.local.json
+.review-tmp/
+.codex_tmp/
+*.code-workspace
+
+# ── 操作系统 ──
+Thumbs.db
+Desktop.ini
+.DS_Store

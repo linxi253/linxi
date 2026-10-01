@@ -1,0 +1,8 @@
+# Runtime dependencies for CPython 3.10 / Windows x64.
+# Exact pins keep source runs and release builds reproducible.
+numpy==2.2.6
+scipy==1.15.3
+opencv-python-headless==4.12.0.88
+tifffile==2025.5.10
+defusedxml==0.7.1
+imagecodecs==2024.12.30

@@ -1,0 +1,17 @@
+# 运行环境锁定（自动生成，请勿手改）
+# 来源：requirements.txt 在干净 venv 中解析；Python 3.10.9
+# 复现：python -m venv .venv; .venv\Scripts\python -X utf8 -m pip install -r requirements.lock.txt
+
+et_xmlfile==2.0.0
+numpy==2.2.6
+opencv-python==5.0.0.93
+openpyxl==3.1.5
+pandas==2.3.3
+pillow==12.3.0
+python-dateutil==2.9.0.post0
+pytz==2026.4
+scipy==1.15.3
+six==1.17.0
+tifffile==2025.5.10
+ttkbootstrap==2.2.3
+tzdata==2026.4

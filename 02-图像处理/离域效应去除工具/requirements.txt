@@ -1,0 +1,14 @@
+﻿# 离域效应去除工具 - 运行依赖
+#
+# 注意：本文件是 UTF-8 **带 BOM**，请勿去掉 BOM。
+# pip 读 requirements 文件时用系统 locale 编码（中文 Windows 是 GBK），
+# 没有 BOM 的 UTF-8 中文注释会让 pip 直接报 UnicodeDecodeError 而装不上。
+#
+# 需要完全一致的版本请改用锁定文件：pip install -r requirements.lock.txt
+numpy>=1.24,<3
+scipy>=1.10
+tifffile>=2023.3
+Pillow>=9.5
+matplotlib>=3.7,<4
+# LZW/PackBits 等常见无损压缩的编解码依赖，缺失时此类 TIFF 无法读写
+imagecodecs>=2023.1

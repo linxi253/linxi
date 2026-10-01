@@ -1,0 +1,23 @@
+# Normalize line endings: store LF in repo, checkout per platform default
+* text=auto
+
+# Explicit text types
+*.py text
+*.md text
+*.txt text
+*.toml text
+*.json text
+*.spec text
+*.ps1 text
+
+# Shell scripts must stay LF or the shebang breaks when executed
+.githooks/** text eol=lf
+
+# Binary types never touched
+*.tif binary
+*.tiff binary
+*.exe binary
+*.dll binary
+*.ico binary
+*.png binary
+*.whl binary

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomic-recognition-intensity-tool"
+version = "1.3.0"
+description = "Traditional atomic-column recognition, stack tracking, and integrated-intensity analysis"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24,<3",
+  "scipy>=1.10,<2",
+  "matplotlib>=3.7,<4",
+  "tifffile>=2023.0,<2027",
+  "pillow>=9,<13",
+]
+
+[tool.setuptools]
+py-modules = ["atomic_core", "atomic_app"]

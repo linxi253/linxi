@@ -1,0 +1,8 @@
+# 统计面积工具运行依赖
+
+tifffile>=2021.7.2   # TIFF 读写与元数据解析
+numpy>=1.20.0        # 数组计算与 stack
+pandas>=1.3.0        # CSV/Excel 导出
+matplotlib>=3.4.0    # 图像显示与图表导出
+Pillow>=8.0.0        # matplotlib 图像处理/可选格式支持（依赖检查也显式验证）
+openpyxl>=3.0.0      # pandas 导出 .xlsx 的引擎

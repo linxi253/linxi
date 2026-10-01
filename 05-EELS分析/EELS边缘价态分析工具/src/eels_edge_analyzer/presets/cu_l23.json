@@ -1,0 +1,26 @@
+{
+  "name": "Cu L2,3 oxidation-state edge profile",
+  "version": "0.1.0",
+  "element": "Cu",
+  "edge": "L2,3",
+  "required_reference_states": [0, 1, 2],
+  "reference_labels": ["Cu0", "Cu1", "Cu2"],
+  "fit_range_ev": [925.0, 970.0],
+  "background_range_ev": [850.0, 925.0],
+  "smoothing_ev": 1.5,
+  "deconvolution_regularization": 0.003,
+  "injection_fractions": [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+  "injection_residual_block_channels": 5,
+  "distance_bins_nm": [
+    ["E1", 0.0, 2.2],
+    ["E2", 2.2, 4.4],
+    ["E3", 4.4, 6.6],
+    ["E4", 6.6, 11.0],
+    ["Bulk", 11.0, null]
+  ],
+  "notes": [
+    "Reference spectra must cover the entire fitting window.",
+    "Fractions are projected spectral weights, not atomic fractions.",
+    "A spectral mixture alone does not establish a crystallographic composite phase."
+  ]
+}

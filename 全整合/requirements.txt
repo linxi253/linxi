@@ -1,0 +1,39 @@
+# TEM Suite 统一依赖清单
+#
+# 版本取自实测通过的环境（12 个工具全部加载成功）。
+# 各原项目声明的约束在此收敛为一份，冲突处理说明见下方。
+
+numpy==2.2.6
+scipy==1.15.3
+matplotlib==3.10.9
+pandas==2.3.3
+tifffile==2025.5.10
+Pillow==12.3.0
+scikit-image==0.25.2
+seaborn==0.13.2
+openpyxl==3.1.5
+imagecodecs==2025.3.30
+defusedxml==0.7.1
+ttkbootstrap>=1.10
+ncempy>=1.16
+# drift-correction-v7 的拖拽支持（未安装时该工具自动回退普通 Tk）
+tkinterdnd2==0.6.2
+
+# ---------------------------------------------------------------------------
+# 统一使用完整版 opencv-python，不使用 opencv-python-headless
+#
+# 冲突背景：
+#   stem-optimize 声明 opencv-python-headless==4.12.0.88
+#   drift-correction / 非晶面积统计 声明 opencv-python
+#
+# 两者占用同一个 cv2 命名空间，无法共存。完整版是 headless 的功能超集，
+# 因此统一取完整版；stem-optimize 只使用数组运算类 API，不受影响。
+#
+# 版本说明：
+#   drift-correction-v7 声明上限 <6，但实测 cv2 5.0.0 下其功能正常
+#   （冲烟测试通过）。此处不设上限，若后续发现 API 不兼容再回退。
+opencv-python>=4.10
+
+# ---------------------------------------------------------------------------
+# 打包工具（仅构建 exe 时需要）
+# pyinstaller>=6.21

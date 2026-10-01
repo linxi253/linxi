@@ -1,0 +1,83 @@
+# ============================================================
+# 原子检测模块 (atom_detector) 全局配置
+# ============================================================
+
+# ---- 路径配置 ----
+paths:
+  # 原始 HRTEM/STEM 图像目录
+  raw_images: "./raw_images"
+  # 半自动预标注输出目录
+  raw_labels: "./raw_labels"
+  # YOLO 格式数据集输出目录
+  dataset_dir: "./datasets/atom_v1"
+  # 训练好的模型权重目录
+  models_dir: "./models"
+
+# ---- 标注配置 ----
+annotation:
+  # 原子标注框边长 = 原子直径(FWHM) × box_scale
+  box_scale: 1.2
+  # 默认原子直径估计 (像素)，标注时可调
+  default_atom_diameter: 6.0
+  # 预标注检测参数
+  pre_detect:
+    sigma: 0.8
+    min_dist: 8
+    window: 5
+    threshold: null  # null = 自适应
+
+# ---- 数据集配置 ----
+dataset:
+  # 训练/验证/测试划分比例
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  # 图像统一尺寸 (YOLOv8 输入)
+  imgsz: 640
+  # 类别
+  names:
+    0: atom
+
+# ---- 训练配置 (16GB 显存优化) ----
+training:
+  # 模型选择: yolov8n / yolov8s / yolov8m
+  model: "yolov8s.pt"
+  epochs: 200
+  imgsz: 640
+  batch: 16          # 16GB 显存: yolov8s@640 约用 10-12GB
+  patience: 30
+  device: "0"
+  workers: 4
+  # 小目标优化超参数
+  box: 12.0
+  cls: 0.5
+  dfl: 2.0
+  lr0: 0.01
+  lrf: 0.01
+  warmup_epochs: 5
+  # 关闭不适合原子图的增强
+  mosaic: 0.0
+  mixup: 0.0
+  copy_paste: 0.0
+
+# ---- 推理配置 ----
+inference:
+  # 默认模型路径
+  model_path: "./models/best.pt"
+  # 模型 SHA-256 白名单（不在此列表中的模型一律拒绝加载）
+  model_allowlist: "./models/allowlist.json"
+  # 置信度阈值
+  conf: 0.5
+  max_det: 3000
+  # NMS IoU 阈值
+  iou: 0.45
+  # 推理图像尺寸
+  imgsz: 640
+  # 是否启用亚像素质心修正
+  refine_centroid: true
+  # 质心修正窗口大小
+  refine_window: 5
+  # 超大图切片推理阈值 (宽或高超过此值时启用 SAHI)
+  sahi_threshold: 2048
+  sahi_slice_size: 640
+  sahi_overlap: 0.1

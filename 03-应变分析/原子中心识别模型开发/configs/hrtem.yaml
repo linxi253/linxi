@@ -1,0 +1,24 @@
+schema_version: 1
+modality: hrtem
+class_names: [atom_column]
+
+image:
+  expected_polarity: auto
+  normalization:
+    method: percentile
+    low: 1.0
+    high: 99.0
+
+refinement:
+  method: com
+  window_size: 7
+  polarity: auto
+
+recommended_metadata:
+  - sample_id
+  - acquisition_id
+  - pixel_size
+  - accelerating_voltage_kv
+  - defocus_nm
+  - spherical_aberration_mm
+  - contrast_polarity

@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atom-center"
+version = "0.3.0"
+description = "Shared development foundation for HAADF-STEM and HRTEM atom-center models"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "matplotlib==3.10.9",
+  "numpy==1.26.4",
+  "Pillow==11.3.0",
+  "PyYAML==6.0.3",
+  "scipy==1.15.3",
+  "tifffile==2025.5.10",
+]
+
+[project.scripts]
+atom-annotate = "atom_center.annotator_gui:main"
+atom-center = "atom_center.cli:main"
+
+[project.optional-dependencies]
+infer = [
+  "onnxruntime==1.20.1",
+  "opencv-python==4.11.0.86",
+]
+train = [
+  "torch==2.7.1",
+  "torchvision==0.22.1",
+  "onnx==1.19.1",
+  "onnxruntime==1.20.1",
+  "opencv-python==4.11.0.86",
+  "ultralytics==8.4.135",
+]
+ml = [
+  "torch==2.7.1",
+  "torchvision==0.22.1",
+  "onnx==1.19.1",
+  "onnxruntime==1.20.1",
+  "opencv-python==4.11.0.86",
+  "ultralytics==8.4.135",
+]
+dev = [
+  "pyinstaller==6.22.2",
+  "pytest==8.4.2",
+  "pytest-cov==6.2.1",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+atom_center = ["assets/*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "ml: tests requiring the PyTorch/ONNX runtime",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["atom_center"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

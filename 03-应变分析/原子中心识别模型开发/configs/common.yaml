@@ -1,0 +1,55 @@
+schema_version: 1
+project: atom-center-model-development
+seed: 20260831
+
+coordinates:
+  order: xy
+  origin: top_left
+  pixel_centers: integer_coordinates
+
+image:
+  tiff_frame_policy: explicit
+  normalization:
+    method: percentile
+    low: 1.0
+    high: 99.0
+    output_range: [0.0, 1.0]
+
+dataset:
+  group_key: acquisition_id
+  split_ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+
+inference:
+  conf: 0.25
+  iou: 0.45
+  max_det: 3000
+  min_atom_distance_px: null
+  tile_size: [640, 640]
+  tile_overlap: 0.1
+  merge_distance_px: 3.0
+
+refinement:
+  enabled: true
+  method: com
+  window_size: 7
+  polarity: auto
+  max_shift_px: null
+
+# 自有灰度增强，不直接传入 Ultralytics。验证/测试完全禁用。
+augmentation:
+  brightness: 0.15
+  contrast: 0.15
+  probability: 0.5
+
+training:
+  model: yolov8s.yaml
+  epochs: 200
+  imgsz: 640
+  batch: 8
+  device: "0"
+  workers: 0
+  amp: false
+  optimizer: AdamW

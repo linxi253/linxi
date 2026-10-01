@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+.venv-build/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+release/
+# legacy/ 与 wheelhouse/ 中现有文件已按追溯/离线构建目的入库跟踪；
+# 以下条目仅抑制这两个目录中后续新增的文件。
+wheelhouse/
+legacy/
+*.partial.tif
+*.partial.json
+*.probe
+*.stem.json
+

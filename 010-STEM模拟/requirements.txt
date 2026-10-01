@@ -1,0 +1,21 @@
+# STEM-HAADF 模拟工具 - 运行依赖
+#
+# 精确版本见 requirements.lock.txt（自动生成，请勿手改）。
+# 复现运行环境：
+#     python -m venv .venv
+#     .venv\Scripts\python -X utf8 -m pip install -r requirements.lock.txt
+#
+# 版本下界与工作区其它工具保持一致，便于与 TEM Suite 共用同一套依赖口径。
+numpy>=1.26,<3
+scipy>=1.11,<2
+matplotlib>=3.7,<4
+Pillow>=10,<13
+tifffile>=2024.2,<2027
+ase>=3.22
+ttkbootstrap>=1.10,<3
+
+# 批量 FFT 加速（强烈推荐，比 scipy 快 4-11 倍）
+pyfftw>=0.13
+
+# 交叉验证用（可选，仅 tests/xcheck_abtem.py 需要）：
+# abtem==1.0.0b34

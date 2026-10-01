@@ -1,0 +1,9 @@
+﻿# 构建打包专用依赖
+#
+# 注意：本文件是 UTF-8 **带 BOM**，请勿去掉 BOM（原因见 requirements.txt）。
+# 实际打包请用锁定文件：pip install -r requirements-dev.lock.txt
+-r requirements.txt
+pyinstaller>=5.13
+pytest>=7.4
+# 仅 validate_real_data.py --input 需要（轮廓提取）；程序本体不依赖
+scikit-image>=0.21

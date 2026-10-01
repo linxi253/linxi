@@ -1,0 +1,23 @@
+schema_version: 1
+modality: haadf_stem
+class_names: [atom_column]
+
+image:
+  expected_polarity: bright
+  normalization:
+    method: percentile
+    low: 1.0
+    high: 99.0
+
+refinement:
+  method: com
+  window_size: 7
+  polarity: bright
+
+recommended_metadata:
+  - sample_id
+  - acquisition_id
+  - pixel_size
+  - accelerating_voltage_kv
+  - detector_inner_angle_mrad
+  - detector_outer_angle_mrad

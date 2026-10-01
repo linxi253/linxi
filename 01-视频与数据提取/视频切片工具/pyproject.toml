@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tem-video-extractor"
+description = "将 TEM 视频可靠转换为 ImageJ 兼容的 TIFF 时间堆栈"
+# 版本单点来源：video_extractor/__init__.py 的 __version__
+dynamic = ["version"]
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "numpy==2.2.6",
+  "tifffile==2025.5.10",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "video_extractor.__version__" }
+
+[project.scripts]
+tem-video-extractor = "video_extractor.cli:main"
+tem-video-extractor-gui = "video_extractor.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

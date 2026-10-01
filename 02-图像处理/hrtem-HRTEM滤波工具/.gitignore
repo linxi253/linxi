@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.manifest
+
+# Test / temporary outputs
+_*.tif
+_*.tif.processing.json
+*.partial
+*.partial.tif
+*.processing.json
+
+# 旧版打包产物（91MB，已归档于 08-历史版本）
+legacy/build-v4/
+
+# 端到端测试临时产物
+_e2e_*.tif
+output/
+batch_output/
+
+# Large media / binary assets (kept on disk, not versioned)
+*.wmv
+*.mp4
+*.dll
+*.gt1
+*.jar
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# ZCode session metadata
+.zcode/

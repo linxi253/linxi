@@ -1,0 +1,26 @@
+# Normalise line endings in the repository (LF stored, native on checkout).
+# Without this, editing on Windows makes every file look fully modified.
+* text=auto
+
+*.py   text diff=python
+*.md   text
+*.yaml text
+*.yml  text
+*.toml text
+*.spec text
+*.txt  text
+*.csv  text
+
+# Binary assets must never be line-ending converted.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.tif  binary
+*.tiff binary
+*.bmp  binary
+*.pt   binary
+*.onnx binary
+*.exe  binary
+*.dm3  binary
+*.dm4  binary
+*.emd  binary

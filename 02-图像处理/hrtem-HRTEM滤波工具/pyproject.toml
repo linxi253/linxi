@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrtem-filter"
+version = "5.1.0"
+description = "Safe, quantitative HRTEM/STEM Kilaas filtering"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "numpy>=1.26,<3",
+    "scipy>=1.11,<2",
+    "tifffile>=2024.2,<2027",
+    "imagecodecs>=2023.9,<2027",
+    "matplotlib>=3.7,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+hrtem-filter = "hrtem_filter.cli:main"
+hrtem-filter-gui = "hrtem_filter.gui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# 显式固定 lint 规则集，保证不同机器/版本的 ruff 结果一致。
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RET", "S", "BLE"]
+ignore = [
+    # GUI/worker 线程捕获所有异常转发到消息队列是刻意设计：
+    # 后台线程的任何异常都必须以用户可见的方式呈现，不能让线程静默死亡。
+    "BLE001",
+    # 清理/回滚路径中的 except Exception: pass 均有注释说明，主异常保留重抛。
+    "S110",
+]

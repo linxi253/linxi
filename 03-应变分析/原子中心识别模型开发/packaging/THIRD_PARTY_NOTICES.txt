@@ -1,0 +1,21 @@
+Atom Center Annotator bundles the following open-source runtimes and libraries.
+Their respective licenses remain in effect.
+
+- CPython — Python Software Foundation License
+  https://docs.python.org/3/license.html
+- Tcl/Tk — Tcl/Tk License
+  https://www.tcl.tk/software/tcltk/license.html
+- NumPy — BSD-3-Clause
+  https://github.com/numpy/numpy/blob/main/LICENSE.txt
+- Matplotlib — PSF-based license
+  https://matplotlib.org/stable/project/license.html
+- Pillow — HPND License
+  https://github.com/python-pillow/Pillow/blob/main/LICENSE
+- tifffile — BSD-3-Clause
+  https://github.com/cgohlke/tifffile/blob/master/LICENSE
+- Noto Sans CJK SC — SIL Open Font License 1.1
+  https://github.com/notofonts/noto-cjk
+- PyInstaller bootloader — GPL-2.0-or-later with the PyInstaller bootloader exception
+  https://pyinstaller.org/en/stable/license.html
+
+This notice is informational and does not replace the full upstream licenses.

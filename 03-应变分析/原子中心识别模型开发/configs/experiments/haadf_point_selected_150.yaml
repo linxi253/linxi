@@ -1,0 +1,35 @@
+# Validation-selected refinement candidate. Keep matching radius and shift cap fixed.
+# Build labels with box-size=8, tile-size=640. This remains a development run.
+seed: 20260909
+augmentation:
+  probability: 0.0
+training:
+  model: yolov8s.yaml
+  epochs: 150
+  patience: 151
+  imgsz: 640
+  batch: 4
+  nbs: 4
+  device: "0"
+  workers: 2
+  warmup_epochs: 0.0
+  save_period: -1
+  degrees: 0.0
+  translate: 0.0
+  scale: 0.0
+  fliplr: 0.0
+  flipud: 0.0
+point_validation:
+  enabled: true
+  interval_epochs: 5
+  match_distance_px: 2.0
+inference:
+  conf: 0.25
+  iou: 0.45
+  max_det: 4000
+refinement:
+  enabled: true
+  method: com
+  window_size: 11
+  polarity: bright
+  max_shift_px: 2.4

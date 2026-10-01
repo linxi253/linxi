@@ -1,0 +1,7 @@
+# Runtime dependencies for Python 3.10–3.14.
+# Exact release builds should be generated from pyproject.toml in a clean venv.
+numpy>=1.26,<3
+scipy>=1.11,<2
+tifffile>=2024.2,<2027
+imagecodecs>=2023.9,<2027
+matplotlib>=3.7,<4

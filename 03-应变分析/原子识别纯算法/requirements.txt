@@ -1,0 +1,6 @@
+numpy>=1.24,<3
+scipy>=1.10,<2
+matplotlib>=3.7,<4
+tifffile>=2023.0,<2027
+pillow>=9,<13
+

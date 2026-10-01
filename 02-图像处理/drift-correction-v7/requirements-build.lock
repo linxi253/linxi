@@ -1,0 +1,2 @@
+# Reproducible v7 packaging toolchain validated on Windows x64 / Python 3.10.9.
+pyinstaller==6.21.0
