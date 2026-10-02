@@ -5,11 +5,32 @@ import numpy as np
 import os
 from ncempy.io import dm
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def _require_env(name: str, hint: str) -> str:
+    """缺环境变量即报错并打印用法；脚本不内置任何本机默认路径。"""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise SystemExit(
+            f'[check_cu_standard] 缺少环境变量 {name}（{hint}）。\n'
+            f'用法：先设置环境变量再重跑，例如：\n'
+            f'  PowerShell: $env:{name} = \'<路径>\'\n'
+            f'  cmd:        set {name}=<路径>')
+    return value
+
+
 def main():
     # Cu foil standard data
-    STANDARD_DIR = os.environ.get('STEM4D_STANDARD',
-                                  r'D:\data\4dSTEM\standard\data')
-    cu_path = os.path.join(STANDARD_DIR, 'Cu foil-grain boundary.dm4')
+    standard_dir = _require_env('STEM4D_STANDARD', '标准样品数据目录')
+    cu_path = os.path.join(standard_dir, 'Cu foil-grain boundary.dm4')
 
     print('='*70)
     print('Cu Foil Standard Data Quality Check')
@@ -183,10 +204,14 @@ def main():
     print('Checking previously extracted Cu data')
     print('='*70)
 
-    BASE = os.environ.get('STEM4D_DATA',
-                          r'D:\data\4dSTEM\20260707-Au')
-    extracted_path = os.path.join(BASE, 'analysis', 'data',
-                                  'Cu_foil_crop128.npy')
+    BASE = os.environ.get('STEM4D_DATA', '').strip()
+    data_dir = os.environ.get('STEM4D_ANALYSIS_DATA', '').strip() or \
+        (os.path.join(BASE, 'analysis', 'data') if BASE else '')
+    if not data_dir:
+        print('\nSkipped extracted-data check '
+              '(set STEM4D_ANALYSIS_DATA or STEM4D_DATA to enable)')
+        return
+    extracted_path = os.path.join(data_dir, 'Cu_foil_crop128.npy')
     if os.path.exists(extracted_path):
         cu_extracted = np.load(extracted_path)
         print(f'\nExtracted Cu data:')
@@ -196,10 +221,8 @@ def main():
         print(f'  Negative pixels: {np.sum(cu_extracted < 0)}')
     else:
         print(f'\nExtracted file not found: {extracted_path}')
-    
+
         # Check what files exist
-        data_dir = os.environ.get('STEM4D_ANALYSIS_DATA',
-                                  os.path.join(BASE, 'analysis', 'data'))
         print(f'\nFiles in {data_dir}:')
         for fname in os.listdir(data_dir):
             if fname.endswith('.npy'):

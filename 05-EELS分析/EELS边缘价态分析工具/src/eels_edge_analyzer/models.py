@@ -112,7 +112,7 @@ class AnalysisConfig:
     distance_bins: tuple[DistanceBin, ...] = field(default_factory=default_distance_bins)
     bootstrap_resamples: int = 500
     bootstrap_block_columns: int = 5
-    random_seed: int = 20260820
+    random_seed: int = 42
 
     run_sensitivity: bool = True
     sensitivity_regularizations: tuple[float, ...] = (0.001, 0.003, 0.01)

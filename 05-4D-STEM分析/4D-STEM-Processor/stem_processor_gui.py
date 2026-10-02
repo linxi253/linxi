@@ -26,6 +26,15 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # All figures are rendered to files from the worker thread, so Agg is the
 # only safe backend. (TkAgg was previously selected here and then silently
 # overridden to Agg by the core module imports.)

@@ -14,6 +14,16 @@ Reference: Pennycook et al., Ultramicroscopy 151, 160-167 (2015)
 import numpy as np
 from numpy.fft import fft2, ifft2, fftshift, ifftshift
 import matplotlib
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import os, time, json

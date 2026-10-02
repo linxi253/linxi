@@ -1,13 +1,17 @@
 # 4D-STEM Processor
 
-用于批量读取 DM4 四维扫描数据并生成 DPC/iDPC、SSB、应变、晶体取向、衍射峰对和 ePIE 叠层成像结果。当前已提供 Windows 可执行文件和一键 GUI。
+用于批量读取 DM4 四维扫描数据并生成 DPC/iDPC、SSB、应变、晶体取向、衍射峰对和 ePIE 叠层成像结果。提供一键 GUI。
 
 ## 当前快速开始
 
 ### 直接运行
 
-```text
-dist/4D-STEM_Processor.exe
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/4D-STEM_Processor.exe` 未随仓库分发。
+需要 exe 请用项目内环境自行打包：
+
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller 4D-STEM_Processor.spec
 ```
 
 1. 选择包含 `.dm4` 文件的输入文件夹；程序会递归搜索。
@@ -67,7 +71,7 @@ SSB 离焦（像差校正）与 ePIE 扫描步距（<1 为超分辨采样）。
 - `tests/`：基于合成数据的自动化冒烟测试（`pytest tests`）。
 - `requirements.txt`：运行时与开发依赖清单。
 - `4D-STEM_Processor.spec`：PyInstaller 配置。
-- `dist/4D-STEM_Processor.exe`：已打包程序。
+- `dist/4D-STEM_Processor.exe`：已打包程序（构建产物，未随仓库分发）。
 
 ## 重要限制
 
@@ -78,8 +82,8 @@ SSB 离焦（像差校正）与 ePIE 扫描步距（<1 为超分辨采样）。
   大扫描区域耗时较长，请酌情调小迭代次数或裁剪尺寸。
 - 输入数据类型和字节序直接取自 DM4 头部（不再按文件大小猜测）；维度顺序由
   ncempy 布局 + 启发式校验共同判断，仍建议核对 BF 图和元数据。
-- 脚本路径可通过环境变量配置（见“数据路径配置”）；未设置时回退到原
-  `D:\data\...` 路径。
+- 脚本路径可通过环境变量配置（见“数据路径配置”）；未设置时报错并打印
+  用法，不回退到任何内置路径。
 - 当前 Au 数据存在背景扣除、负值、小探测器和低信背比问题；相关结果只能用于方法验证，不能直接作为可靠定量结论。
 
 下面的原文档记录了 Au 数据处理方法、修复历史和已知数据质量问题。
@@ -164,8 +168,8 @@ measure/
 # 推荐 Python 3.10+
 python --version
 
-# 必需依赖
-pip install numpy scipy matplotlib ncempy
+# 必需依赖（版本区间以 requirements.txt 为准）
+pip install -r requirements.txt
 ```
 
 ### 依赖项
@@ -175,7 +179,7 @@ pip install numpy scipy matplotlib ncempy
 | numpy | ≥1.24 | 数值计算 |
 | scipy | ≥1.10 | 取向、峰值、插值和叠层成像辅助计算 |
 | matplotlib | ≥3.7 | 可视化 |
-| ncempy | ≥1.0 | DM4文件读取 |
+| ncempy | ≥1.8,<2 | DM4文件读取 |
 
 ### 硬件要求
 
@@ -233,7 +237,7 @@ from ncempy.io import dm
 import numpy as np
 
 # 打开 DM4 文件
-f = dm.fileDM('007_STEM SI.dm4')
+f = dm.fileDM('<原始数据>.dm4')
 
 # 识别 4D-STEM 对象（ndim=4）
 # 数据类型: float32 (dataType=2；旧文档按错码表记为 int16)
@@ -503,7 +507,7 @@ SSB 单边带叠层成像算法。
 
 ```bash
 python processing/process_au_v3.py
-python processing/process_au_v3.py --data-dir D:\data --output-dir D:\out
+python processing/process_au_v3.py --data-dir <数据目录> --output-dir <输出目录>
 ```
 
 **输出文件:**
@@ -527,7 +531,7 @@ python processing/process_au_v3.py --data-dir D:\data --output-dir D:\out
 
 ```bash
 python processing/extract_au_correct.py
-python processing/extract_au_correct.py --base-dir D:\data --crop 128
+python processing/extract_au_correct.py --base-dir <数据目录> --crop 128
 python processing/extract_au_correct.py a.dm4 b.dm4 --out-dir out
 ```
 
@@ -662,7 +666,7 @@ Cu 标准数据验证。
 
 ```bash
 # 1. 进入 measure 目录
-cd D:\data\4dSTEM\measure
+cd <数据目录>\measure
 
 # 2. 安装依赖
 pip install numpy matplotlib ncempy
@@ -680,6 +684,8 @@ python processing/process_au_v3.py
 ### 完整流程
 
 ```bash
+# 先按下方「数据路径配置」设置 STEM4D_* 环境变量（脚本不内置默认数据路径）
+
 # 步骤 1: 数据诊断
 python diagnostics/check_raw_data.py
 python diagnostics/diagnose_au.py
@@ -701,19 +707,29 @@ python processing/batch_dpc.py
 
 ### 数据路径配置
 
-所有脚本都支持命令行参数（见各脚本 `--help`），并可用环境变量配置
-默认路径，未设置时回退到 `D:\data\...` 路径：
+所有脚本都支持命令行参数（见各脚本 `--help`），并可用环境变量提供路径。
+脚本**不内置任何默认数据路径**：缺少环境变量（或命令行参数）时会报错并
+打印用法，不会回退到任何写死的盘符路径：
 
 ```powershell
-# 原始 Au 数据集根目录
-$env:STEM4D_DATA = 'D:\data\4dSTEM\20260707-Au'
+# 数据根目录（用于派生 analysis\data 与 analysis\results\v2 默认值）
+$env:STEM4D_DATA = '<数据根目录>'
 
-# 标准数据目录（Cu foil / DPC Demo）
-$env:STEM4D_STANDARD = 'D:\data\4dSTEM\standard\data'
+# 待检查的原始 DM4 文件完整路径（check_raw_data.py / verify_dtype.py 必填）
+$env:STEM4D_DM4 = '<数据根目录>\<原始数据目录>\<主图>.dm4'
 
-# 分析数据与输出目录（默认分别为 <STEM4D_DATA>\analysis\data 与 ...\results\v2）
-$env:STEM4D_ANALYSIS_DATA = 'D:\data'
-$env:STEM4D_OUTPUT = 'D:\results'
+# 标准样品数据目录（check_cu_standard.py 必填；check_raw_data.py 第 7 项可选）
+$env:STEM4D_STANDARD = '<标准数据目录>'
+
+# 提取后的数据目录（analyze_correct_data.py / diagnose_au.py /
+# process_au_v3.py 必填，或用 STEM4D_DATA 派生）
+$env:STEM4D_ANALYSIS_DATA = '<提取数据目录>'
+
+# 输出目录（可选，缺省时部分脚本回退到脚本旁 output\）
+$env:STEM4D_OUTPUT = '<输出目录>'
+
+# 提取脚本的数据集清单（可选，「名称=相对路径」分号分隔，相对 STEM4D_DATA）
+$env:STEM4D_DATASETS = 'DS1=<相对路径1>;DS2=<相对路径2>'
 ```
 
 ---

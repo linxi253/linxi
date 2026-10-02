@@ -5,13 +5,33 @@ import numpy as np
 import os
 import sys
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import dm4_io
 
+
+def _require_env(name: str, hint: str) -> str:
+    """缺环境变量即报错并打印用法；脚本不内置任何本机默认路径。"""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise SystemExit(
+            f'[verify_dtype] 缺少环境变量 {name}（{hint}）。\n'
+            f'用法：先设置环境变量再重跑，例如：\n'
+            f'  PowerShell: $env:{name} = \'<路径>\'\n'
+            f'  cmd:        set {name}=<路径>')
+    return value
+
+
 def main():
-    BASE = os.environ.get('STEM4D_DATA',
-                          r'D:\data\4dSTEM\20260707-Au')
-    dm4_path = os.path.join(BASE, 'SI data (19)', '007_STEM SI.dm4')
+    dm4_path = _require_env('STEM4D_DM4', '待检查的原始 DM4 文件完整路径')
 
     if not os.path.exists(dm4_path):
         print(f'File not found: {dm4_path}')

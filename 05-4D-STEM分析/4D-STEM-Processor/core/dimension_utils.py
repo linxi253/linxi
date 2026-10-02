@@ -10,6 +10,16 @@ the acquisition software and detector. This module provides tools to:
 import numpy as np
 from scipy import ndimage
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def verify_dimensions(data, expected_scan=None, expected_det=None):
     """
@@ -321,12 +331,17 @@ def print_quality_report(stats):
 if __name__ == '__main__':
     # Test with DPC Demo data
     import os
-    
-    base = os.environ.get('STEM4D_DATA',
-                          r'D:\data\4dSTEM\20260707-Au')
-    data_path = os.path.join(base, 'analysis', 'data',
-                             'DPC_Demo_Data_crop128.npy')
-    if os.path.exists(data_path):
+
+    data_path = os.environ.get('STEM4D_DEMO_NPY', '').strip() or (
+        os.path.join(os.environ.get('STEM4D_ANALYSIS_DATA', '').strip()
+                     or os.path.join(os.environ.get('STEM4D_DATA', '').strip(),
+                                     'analysis', 'data'),
+                     'DPC_Demo_Data_crop128.npy'))
+    if not os.path.exists(data_path):
+        print('[SKIP] 未找到演示数据：请设置 STEM4D_DEMO_NPY 指向'
+              ' DPC_Demo_Data_crop128.npy（或设置 STEM4D_ANALYSIS_DATA /'
+              ' STEM4D_DATA 数据目录）后重跑')
+    else:
         data = np.load(data_path)
         print(f"Loaded data: {data.shape}")
         

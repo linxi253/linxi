@@ -14,6 +14,15 @@ from .presets import config_from_saved, load_preset, parse_distance_bins_text
 from .references import discover_cu_references
 from .reporting import export_artifacts
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 # CLI 参数的 argparse dest → AnalysisConfig 字段。
 _VALUE_FIELDS: dict[str, str] = {
     "fit_min_ev": "fit_min_ev",
