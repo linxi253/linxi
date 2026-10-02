@@ -210,13 +210,14 @@ def rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
 
     channels = rgb[..., :3].astype(np.float64)
     weights = np.array([0.2989, 0.5870, 0.1140], dtype=np.float64)
-    gray = np.rint(channels @ weights)
+    weighted = channels @ weights
 
     dtype = rgb.dtype
     if np.issubdtype(dtype, np.integer):
+        gray = np.rint(weighted)
         info = np.iinfo(dtype)
         return np.clip(gray, 0, info.max).astype(dtype)
-    return np.clip(gray, 0.0, None).astype(dtype)
+    return np.clip(weighted, 0.0, None).astype(dtype)
 
 
 def _color_axis_position(shape: Tuple[int, ...], axes: str) -> Optional[int]:

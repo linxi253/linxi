@@ -245,11 +245,16 @@ class TestNormalizeTiffArray:
         assert np.all(rgb_to_gray(black) == 0)
 
     def test_rgb_to_gray_float_path(self):
-        white = np.full((2, 2, 3), 1.0, dtype=np.float32)
-        out = rgb_to_gray(white)
+        # 非饱和混合值：旧实现在浮点路径误加 np.rint 会把 0.45→0、0.8→1
+        # 二值化；契约是直接加权求和（不取整），必须断言精确数值防回归。
+        img = np.full((2, 2, 3), 0.45, dtype=np.float32)
+        img[0, 1] = 0.8
+        out = rgb_to_gray(img)
         assert out.dtype == np.float32
-        # 0.2989+0.5870+0.1140 = 0.9999 → rint → 1.0
-        assert np.all(out == np.float32(1.0))
+        # 0.2989+0.5870+0.1140 = 0.9999 → 0.45*0.9999=0.449955、0.8*0.9999=0.79992
+        assert np.allclose(out[0, 0], 0.449955, rtol=1e-6, atol=0)
+        assert np.allclose(out[0, 1], 0.79992, rtol=1e-6, atol=0)
+        assert not np.any((out == 0) | (out == 1))
 
     def test_rgb_to_gray_negative_float_clipped(self):
         arr = np.full((2, 2, 3), -10.0, dtype=np.float32)
