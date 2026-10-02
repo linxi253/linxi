@@ -43,7 +43,26 @@ def test_params_validate_rejects(kw):
 
 
 def test_params_validate_accepts_defaults():
-    SimParams().validate()  # 默认值必须合法
+    """默认参数除「不抛异常」外，关键数值字段还须落在各自的合法区间。
+
+    仅靠 validate() 不抛异常只能发现「构造即崩」；若默认值被改成
+    仍能通过校验但语义上失真的值（审计条目 68），需要显式断言兜底。
+    """
+    p = SimParams()
+    p.validate()  # 默认值必须合法
+    assert p.thickness_nm > 0
+    assert p.voltage_kv > 0
+    assert p.target_xy_a > 0
+    assert p.sampling_a > 0
+    assert p.slice_thickness_a > 0
+    assert p.output_sampling_a >= 0
+    assert p.aperture_mrad >= 0
+    assert p.focal_spread_a >= 0
+    assert p.angular_spread_mrad >= 0
+    assert p.display_blur_a >= 0
+    assert p.gpts_mode in ("auto", "256", "512", "1024")
+    assert p.table in ("peng", "gauss3")
+    assert 0.0 <= p.display_lo_pct < p.display_hi_pct <= 100.0
 
 
 def test_params_from_dict_coercion():

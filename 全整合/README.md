@@ -69,7 +69,7 @@ python -m venv .venv
 | 原子标注工具 | 0.3.0 | `03-应变分析/原子中心识别模型开发` |
 | 4D-STEM 处理 | 2.2.0 | `05-4D-STEM分析/4D-STEM-Processor` |
 | 原子衬度统计 | 2.5.0 | `04-统计分析/原子衬度统计` |
-| 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计/pythonProject` |
+| 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计` |
 | TIFF 面积测量 | —（未维护版本常量） | `04-统计分析/统计面积` |
 | 特征区域演化分析 | 2026.09.2 | `04-统计分析/特征区域演化分析` |
 | HRTEM 高分辨模拟 | 1.2.0（tem_sim 引擎） | `09-HRTEM模拟` |
@@ -226,7 +226,7 @@ python tests/smoke_test.py drift_correct       # 指定工具
 └── run.py                开发模式入口
 ```
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

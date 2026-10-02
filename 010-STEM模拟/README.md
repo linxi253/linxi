@@ -264,7 +264,7 @@ Au [100]、300 kV、Cs=0.01 mm、探针 25 mrad、探测器 50–100 mrad、t=10
 （重复模拟甚至进程爆炸）。引擎会检测该守卫，缺失时自动退回串行并在结果
 notes 中说明；`stem_tool/main.py` 已带守卫。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

@@ -16,8 +16,7 @@ if not input_folder or not output_folder:
         '$env:SQYE_OUTPUT_DIR = \'<输出文件夹>\'\n'
         '  cmd:        set SQYE_INPUT_DIR=<输入文件夹> && '
         'set SQYE_OUTPUT_DIR=<输出文件夹>')
-saveImage = 5  # 1 = save images, 0 = don't save images
-psf_radius = 2
+saveImage = 1  # 非 0 即保存反卷积结果，0 = 只算不存
 nsr = 0.6  # noise to signal ratio
 
 # Create output folder if needed

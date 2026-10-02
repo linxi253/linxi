@@ -1,37 +1,7 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
-build/
-dist/
-release/
-wheelhouse/
-.venv*/
-venv/
-*.exe
-*.pkg
-*.pyz
-*.whl
-*.dll
-*.pyd
-*.zip
-*.7z
-*.mp4
-*.tif
-*.tiff
-*.dm3
-*.dm4
-*.pt
-*.pth
-*.onnx
-.idea/
-.claude/
-.qoder/
-Thumbs.db
+# 本目录特有规则；通用 Python/构建/媒体忽略规则见仓库根 .gitignore。
+# （tests/output/ 已由根 output/ 覆盖，原两处重复行已上收）
 
-# 测试输出产物
-tests/output/
+.claude/
 
 # 示例与测试产物（示例图保留，中间输出不入库）
-tests/output/
 examples/series/

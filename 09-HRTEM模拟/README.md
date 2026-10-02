@@ -189,7 +189,7 @@ python validate_reproduce.py --legacy  # legacy（gauss3）：逐比特复现旧
 - 非周期结构（PDB/XYZ 无晶胞）建议真空边距 ≥ 8 Å（`padding` 参数），
   不足时引擎会告警（宽尾相位核回绕风险）。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

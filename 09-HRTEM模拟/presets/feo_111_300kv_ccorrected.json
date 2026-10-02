@@ -20,7 +20,7 @@
   "output_sampling_a": 0.0,
   "polarity": 1,
   "display_blur_a": 0.0,
-  "_comment": "20260815 FeO[111]匹配条件：300 kV, Cs=-800 nm(校正), df=+3 nm, 30 mrad光阑",
+  "_comment": "FeO [111] 球差校正条件：300 kV, Cs=-800 nm(校正), df=+3 nm, 30 mrad光阑",
   "status": "needs-recalibration",
   "_note_2026_09": "P0 标度修正后（默认 Peng 表），本预设参数为 legacy(gauss3) 口径寻优结果，使用前建议重扫离焦/厚度"
 }
