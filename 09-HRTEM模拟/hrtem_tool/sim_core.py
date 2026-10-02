@@ -1,7 +1,7 @@
 """模拟核心管线：CIF → 带轴超胞 → Multislice → CTF 成像 → 取向渲染。
 
 GUI 与命令行/验收脚本共用同一条路径，保证界面出图与
-20260820 验收结果物理一致。
+内部参考数据集基线结果物理一致。
 """
 
 from __future__ import annotations

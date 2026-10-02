@@ -1,5 +1,5 @@
 {
-  "name": "Fe3O4 [110] 参考图S36红框(300kV)",
+  "name": "Fe3O4 [110] 红框参考图(300kV)",
   "cif_path": "cif/Fe3O4_Fd-3m.cif",
   "zone": [1, 1, 0],
   "thickness_nm": 25.0,
@@ -20,7 +20,7 @@
   "output_sampling_a": 0.0,
   "polarity": -1,
   "display_blur_a": 0.9,
-  "_comment": "参考文献Figure S36红框风格：300 kV, Cs=1 mm, df=-20 nm, 5.5 mrad光阑, 参考FFT相关0.924; 显示需反转极性",
+  "_comment": "红框风格参考图：300 kV, Cs=1 mm, df=-20 nm, 5.5 mrad光阑; 显示需反转极性（历史匹配度数值见内部标定记录）",
   "status": "needs-recalibration",
-  "_note_2026_09": "P0 标度修正后（默认 Peng 表），本预设参数为 legacy(gauss3) 口径寻优结果，需重扫；复现 S36 风格请用 validate_reproduce.py --legacy"
+  "_note_2026_09": "P0 标度修正后（默认 Peng 表），本预设参数为 legacy(gauss3) 口径寻优结果，需重扫；复现红框风格请用 validate_reproduce.py --legacy"
 }

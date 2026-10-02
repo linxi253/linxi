@@ -1,5 +1,5 @@
 {
-  "name": "Fe3O4 [110] 0820最终(可接受结果)",
+  "name": "Fe3O4 [110] 交付基线(FFT校验版)",
   "cif_path": "cif/Fe3O4_Fd-3m.cif",
   "zone": [1, 1, 0],
   "thickness_nm": 3.0,
@@ -20,7 +20,7 @@
   "output_sampling_a": 0.0,
   "polarity": 1,
   "display_blur_a": 0.3,
-  "_comment": "20260820 FFT校验版最终物理参数：200 kV, Cs=0.085 mm, df=-34 nm, 实际厚度3.5825 nm, NCC 0.60 / FFT相关 0.86",
+  "_comment": "FFT 校验版物理参数：200 kV, Cs=0.085 mm, df=-34 nm, 实际厚度3.5825 nm（历史匹配度数值见内部标定记录）",
   "status": "needs-recalibration",
-  "_note_2026_09": "P0 标度修正后（默认 Peng 表），下列参数为 legacy(gauss3) 口径寻优结果；Peng 表下二维重扫 best≈NCC 0.35（t≈2.6 nm, df≈-30 nm），完整重标定待办（见 README 散射因子标度修正）。复现 0820 交付请用 validate_reproduce.py --legacy"
+  "_note_2026_09": "P0 标度修正后（默认 Peng 表），下列参数为 legacy(gauss3) 口径寻优结果；Peng 表下二维重扫最优匹配显著低于 legacy 口径（t≈2.6 nm, df≈-30 nm），完整重标定待办（见 README 散射因子标度修正）。复现旧交付基线请用 validate_reproduce.py --legacy"
 }

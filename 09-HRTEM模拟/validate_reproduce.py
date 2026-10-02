@@ -1,4 +1,4 @@
-"""验收脚本：复现 20260820 交付结果 + 标准表重标定基线。
+"""验收脚本：复现内部参考数据集基线 + 标准表重标定基线。
 
 自 2026-09 P0 修复起，引擎默认使用 Peng 标准散射因子表（物理标度），
 SimulaTEM gauss3 表降级为 legacy（table="gauss3"）。本脚本因此提供两种模式：
@@ -9,18 +9,21 @@ SimulaTEM gauss3 表降级为 legacy（table="gauss3"）。本脚本因此提供
 检查项
 ------
 1. 物理自检（λ(300 kV)）。
-2. 最终交付复现：
-   - legacy 模式：与 0820 交付的 04_物理原始强度_float32.npy 计算 NCC，
+2. 基线复现：
+   - legacy 模式：与内部参考数据集的物理强度 NPY 计算 NCC，
      同引擎同参数应 ≈ 1.0（管线无回归，阈值 >0.999）；
-   - 标准模式：0820 交付参考为 legacy 口径产物，不做逐比特比对；
+   - 标准模式：旧交付参考为 legacy 口径产物，不做逐比特比对；
      改为与实验图直接对比，并对离焦做 ±16 nm 扫描给出重标定基线，
      生成 tests/output/final_reproduced_standard.npy 新参考。
-3. S36 红框风格复现（300 kV / Cs=1 mm / 5.5 mrad）：
-   - legacy 模式：与交付 PNG 的 NCC（阈值 >0.85）；
+3. 红框风格参考复现（300 kV / Cs=1 mm / 5.5 mrad）：
+   - legacy 模式：与参考 PNG 的 NCC（阈值 >0.85）；
    - 标准模式：信息性输出（参考图本身为 legacy 口径渲染，不设阈值）。
 
 用法：python validate_reproduce.py [--legacy] [--ref-root DIR]
-      （参考数据根目录也可用环境变量 HRTEM_REF_ROOT 指定）
+      （参考数据根目录也可用环境变量 HRTEM_REF_ROOT 指定；
+        参考数据的具体目录结构不在脚本内写死，布局不同时可用
+        HRTEM_REF_FINAL_NPY / HRTEM_REF_EXPERIMENT_PNG / HRTEM_REF_REDBOX_PNG
+        逐项给出完整路径）
 """
 
 from __future__ import annotations
@@ -41,9 +44,13 @@ from tem_sim import Microscope, multislice, read_structure, zone_axis_cell  # no
 from tem_sim.imaging import hrtem_image  # noqa: E402
 from hrtem_tool.render import oriented_image, resize_float, robust_norm  # noqa: E402
 
-# ---- 20260820 参考数据根目录 ----
-# 查找顺序：--ref-root 参数 > HRTEM_REF_ROOT 环境变量 > 原始 E 盘路径。
-# 参考数据缺失时对应检查项自动跳过，不影响其余验收。
+# ---- 参考数据根目录 ----
+# 查找顺序：--ref-root 参数 > HRTEM_REF_ROOT 环境变量 > 占位符（必然不存在，
+# 对应检查项自动跳过，不影响其余验收）。参考数据的内部目录结构不写入本脚本：
+# 布局不同时用 HRTEM_REF_FINAL_NPY / HRTEM_REF_EXPERIMENT_PNG /
+# HRTEM_REF_REDBOX_PNG 环境变量逐项给出完整路径即可。
+
+_PLACEHOLDER_REF_ROOT = Path("<HRTEM_REF_ROOT>")
 
 
 def _ref_root() -> Path:
@@ -55,24 +62,32 @@ def _ref_root() -> Path:
     env = os.environ.get("HRTEM_REF_ROOT")
     if env:
         return Path(env)
-    return Path(r"D:\refdata\20260820")
+    return _PLACEHOLDER_REF_ROOT
 
 
 REF_ROOT = _ref_root()
-FINAL_STAGE = REF_ROOT / "01_最终结果_FFT校验版_暂存"
-FINAL_NPY = FINAL_STAGE / "01_实验图匹配" / "04_物理原始强度_float32.npy"
-EXPERIMENT_PNG = REF_ROOT / "Fe3O4-110.png"
-S36_PNG = FINAL_STAGE / "03_参考图S36复现" / "01_S36红框风格复现.png"
+
+
+def _ref_path(env_key: str, default_name: str) -> Path:
+    override = os.environ.get(env_key)
+    if override:
+        return Path(override)
+    return REF_ROOT / default_name
+
+
+FINAL_NPY = _ref_path("HRTEM_REF_FINAL_NPY", "physical_intensity.npy")
+EXPERIMENT_PNG = _ref_path("HRTEM_REF_EXPERIMENT_PNG", "experiment.png")
+REDBOX_PNG = _ref_path("HRTEM_REF_REDBOX_PNG", "redbox_reference.png")
 OUT_DIR = HERE / "tests" / "output"
 
-# 0820 最终交付参数（200 kV / Cs=0.085 mm / df=-34 nm / 24 mrad / 像散 120Å@145°）
+# 交付基线成像参数（200 kV / Cs=0.085 mm / df=-34 nm / 24 mrad / 像散 120Å@145°）
 FINAL_SCOPE_KW = dict(
     voltage_kv=200.0, cs=850000.0, defocus=-340.0,
     astigmatism=120.0, astigmatism_azimuth=145.0,
     aperture_outer=24.0, focal_spread=30.0, angular_spread=0.3,
 )
-# S36 红框参数（300 kV / Cs=1 mm / df=-200 Å / 5.5 mrad）
-S36_SCOPE_KW = dict(
+# 红框风格参考参数（300 kV / Cs=1 mm / df=-200 Å / 5.5 mrad）
+REDBOX_SCOPE_KW = dict(
     voltage_kv=300.0, cs=1.0e7, defocus=-200.0,
     aperture_outer=5.5, focal_spread=30.0, angular_spread=0.3,
 )
@@ -93,7 +108,7 @@ def gray_png(path: Path) -> np.ndarray:
 
 
 def central_experiment_roi(arr: np.ndarray) -> np.ndarray:
-    """与 0820 脚本完全一致的实验图中心 ROI 裁剪。"""
+    """与旧标定脚本完全一致的实验图中心 ROI 裁剪。"""
     side = min(arr.shape[1] - 110, arr.shape[0] - 190)
     x0 = (arr.shape[1] - side) // 2
     y0 = 18
@@ -111,7 +126,7 @@ def check_physics() -> bool:
 def reproduce_final(table: str, legacy: bool) -> bool:
     """最终交付复现。legacy: 逐比特复现交付 NPY；standard: 实验 NCC 基线 + df 扫描。"""
     if not FINAL_NPY.exists() or not EXPERIMENT_PNG.exists():
-        print("[SKIP] 找不到 20260820 参考数据（E 盘），跳过最终结果复现")
+        print("[SKIP] 未配置参考数据（--ref-root / HRTEM_REF_ROOT），跳过基线复现")
         return True
     unit = read_structure(HERE / "cif" / "Fe3O4_Fd-3m.cif")
     crystal = zone_axis_cell(unit, [1, 1, 0], target_xy=55.0, target_thickness=30.0)
@@ -148,7 +163,7 @@ def reproduce_final(table: str, legacy: bool) -> bool:
         return ok
 
     # 标准模式：厚度×离焦二维重标定扫描
-    # （相位标度相对 legacy 变为 1/1.87，0820 参数需在新物理下重新寻优；
+    # （相位标度相对 legacy 变为 1/1.87，交付基线参数需在新物理下重新寻优；
     #   厚度序列复用一次势场，成像/渲染是主要开销）
     from tem_sim import multislice_series
     thicknesses_nm = [2.5, 3.0, 3.5, 4.0]
@@ -184,9 +199,8 @@ def reproduce_final(table: str, legacy: bool) -> bool:
                 output_shape=experiment_full.shape, shift_a=(3.0 * ems, 1.0 * ems),
             )
             break
-    print(f"标准表基线：t={best_t:.2f} nm, df={best_df:+d} nm，NCC(实验) = {best_score:.4f}"
-          f"（legacy 口径 0820 验收为 0.60）")
-    # 物理标度修正后，0820 的可接受外观（NCC 0.60）部分来自过强相位；
+    print(f"标准表基线：t={best_t:.2f} nm, df={best_df:+d} nm，NCC(实验) = {best_score:.4f}")
+    # 物理标度修正后，旧交付基线的可接受外观部分来自过强相位；
     # (厚度, 离焦) 二维寻优 best≈0.35，完整重标定需扩展至光阑/像散/极性等，
     # 属于待办研究工作（见 README「散射因子标度修正」一节）。此处验收的
     # 是端到端基线生成，实验匹配度作为信息性指标记录。
@@ -202,16 +216,16 @@ def reproduce_final(table: str, legacy: bool) -> bool:
     return True
 
 
-def reproduce_s36(table: str, legacy: bool) -> bool:
-    """S36 红框风格复现。legacy: 与交付 PNG 比 NCC；standard: 信息性输出。"""
-    if not S36_PNG.exists():
-        print("[SKIP] 找不到 S36 复现参考图，跳过")
+def reproduce_redbox(table: str, legacy: bool) -> bool:
+    """红框风格参考复现。legacy: 与参考 PNG 比 NCC；standard: 信息性输出。"""
+    if not REDBOX_PNG.exists():
+        print("[SKIP] 找不到红框风格参考图，跳过")
         return True
     unit = read_structure(HERE / "cif" / "Fe3O4_Fd-3m.cif")
     crystal = zone_axis_cell(unit, [1, 1, 0], target_xy=55.0, target_thickness=250.0)
-    wave = multislice(crystal, Microscope(**S36_SCOPE_KW),
+    wave = multislice(crystal, Microscope(**REDBOX_SCOPE_KW),
                       sampling=0.07, slice_thickness=2.0, verbose=False, table=table)
-    raw = hrtem_image(wave, Microscope(**S36_SCOPE_KW))
+    raw = hrtem_image(wave, Microscope(**REDBOX_SCOPE_KW))
 
     from scipy.ndimage import gaussian_filter
     out_shape = (512, 512)
@@ -224,42 +238,42 @@ def reproduce_s36(table: str, legacy: bool) -> bool:
     )
     panel = -gaussian_filter(panel, 0.9 / out_sampling)
 
-    target = robust_norm(resize_float(gray_png(S36_PNG), out_shape))
+    target = robust_norm(resize_float(gray_png(REDBOX_PNG), out_shape))
     mine = robust_norm(panel)
     score = ncc(mine, target)
-    print(f"S36 红框复现（table={table}）：NCC = {score:.4f}（参考图为 legacy 直方图匹配显示图）")
+    print(f"红框风格复现（table={table}）：NCC = {score:.4f}（参考图为 legacy 直方图匹配显示图）")
 
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "sans-serif"]
     fig, axes = plt.subplots(1, 2, figsize=(8.2, 4.2))
-    axes[0].imshow(target, cmap="gray"); axes[0].set_title("0820 交付复现图")
+    axes[0].imshow(target, cmap="gray"); axes[0].set_title("内部参考复现图")
     axes[1].imshow(mine, cmap="gray"); axes[1].set_title(f"本工具管线（{table} 表）")
     for ax in axes:
         ax.axis("off")
-    fig.suptitle(f"Figure S36 红框风格对照（NCC = {score:.3f}）")
+    fig.suptitle(f"红框风格参考对照（NCC = {score:.3f}）")
     fig.tight_layout()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT_DIR / "s36_comparison.png", dpi=200)
+    fig.savefig(OUT_DIR / "redbox_comparison.png", dpi=200)
     plt.close(fig)
 
     if legacy:
         ok = score > 0.85
-        print(f"[{'OK' if ok else 'FAIL'}] S36 红框复现（阈值 NCC>0.85）")
+        print(f"[{'OK' if ok else 'FAIL'}] 红框风格复现（阈值 NCC>0.85）")
         return ok
-    print("[INFO] 标准模式：S36 参考为 legacy 口径渲染，仅记录不判阈值")
+    print("[INFO] 标准模式：红框参考为 legacy 口径渲染，仅记录不判阈值")
     return True
 
 
 def main() -> int:
     legacy = "--legacy" in sys.argv
     table = "gauss3" if legacy else "peng"
-    mode = "legacy（gauss3 表，复现 0820 交付口径）" if legacy else "standard（Peng 表，物理标准）"
+    mode = "legacy（gauss3 表，复现旧交付口径）" if legacy else "standard（Peng 表，物理标准）"
     print("=" * 60)
     print(f"HRTEM 模拟工具 · 验收（{mode}）")
     print("=" * 60)
-    results = [check_physics(), reproduce_final(table, legacy), reproduce_s36(table, legacy)]
+    results = [check_physics(), reproduce_final(table, legacy), reproduce_redbox(table, legacy)]
     print("=" * 60)
     if all(results):
         print("全部验收通过 ✔")

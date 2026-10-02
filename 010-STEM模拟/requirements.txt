@@ -5,8 +5,10 @@
 #     python -m venv .venv
 #     .venv\Scripts\python -X utf8 -m pip install -r requirements.lock.txt
 #
-# 版本下界与工作区其它工具保持一致，便于与 TEM Suite 共用同一套依赖口径。
-numpy>=1.26,<3
+# 版本下界 >=2.0：代码调用了 NumPy 2.0 才新增的 np.trapezoid
+# （stem_sim/phonons.py、tests/verify_physics.py），1.x 下会运行时 AttributeError；
+# 与 05-EELS分析/EELS边缘价态分析工具 的声明口径一致。
+numpy>=2.0,<3
 scipy>=1.11,<2
 matplotlib>=3.7,<4
 Pillow>=10,<13

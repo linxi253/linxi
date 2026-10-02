@@ -1,7 +1,7 @@
 """pytest 封装：verify_physics 中的全部物理自检。
 
 运行：python -m pytest tests/ -v
-（无外部数据依赖；E 盘相关的 0820 复现请运行 validate_reproduce.py）
+（无外部数据依赖；内部参考数据集基线复现请运行 validate_reproduce.py）
 """
 
 import sys
