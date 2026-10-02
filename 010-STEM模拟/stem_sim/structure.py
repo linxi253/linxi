@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -118,6 +119,7 @@ def read_pdb(path: str | Path) -> Structure:
     """
     symbols: List[str] = []
     positions: List[List[float]] = []
+    inferred_element = 0  # 无元素列（77-78 列）、按原子名启发式解析的记录数
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             record = line[:6].strip()
@@ -132,16 +134,26 @@ def read_pdb(path: str | Path) -> Structure:
                 elem = line[76:78].strip() if len(line.rstrip()) >= 77 else ""
                 if elem.isalpha() and len(elem) <= 2:
                     name = elem
+                else:
+                    inferred_element += 1
             except (ValueError, IndexError):
                 parts = line.split()
                 if len(parts) < 5:
                     continue
                 name = parts[2]
                 x, y, z = float(parts[-3]), float(parts[-2]), float(parts[-1])
+                inferred_element += 1
             symbols.append(_normalize_symbol(name))
             positions.append([x, y, z])
     if not symbols:
         raise ValueError(f"{path}: 未找到 ATOM/HETATM 记录")
+    if inferred_element:
+        warnings.warn(
+            f"{path}: {inferred_element} 个原子记录无元素列（77-78 列），按原子名"
+            "启发式解析——PDB 氢命名（如 1HG）可能被误判为 Hg；正式模拟建议"
+            "使用带元素列的 PDB 或改用 XYZ/CIF",
+            stacklevel=2,
+        )
     return Structure(symbols, np.array(positions), cell=None)
 
 
@@ -154,7 +166,12 @@ def read_xyz(path: str | Path) -> Structure:
     positions: List[List[float]] = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         lines = [ln.strip() for ln in f if ln.strip()]
-    n_atoms = int(lines[0].split()[0])
+    if not lines:
+        raise ValueError(f"{path}: 空文件")
+    try:
+        n_atoms = int(lines[0].split()[0])
+    except (IndexError, ValueError) as exc:
+        raise ValueError(f"{path}: 首行应为原子数，实际为 {lines[0]!r}") from exc
     for line in lines[2:]:
         parts = line.replace("\t", " ").split()
         if len(parts) < 4:
@@ -163,6 +180,12 @@ def read_xyz(path: str | Path) -> Structure:
         positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
     if len(symbols) < n_atoms:
         raise ValueError(f"{path}: 声明 {n_atoms} 个原子，实际读到 {len(symbols)} 个")
+    if len(symbols) > n_atoms:
+        warnings.warn(
+            f"{path}: 声明 {n_atoms} 个原子，实际读到 {len(symbols)} 行，"
+            f"已截取前 {n_atoms} 个",
+            stacklevel=2,
+        )
     return Structure(symbols[:n_atoms], np.array(positions[:n_atoms]), cell=None)
 
 

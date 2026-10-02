@@ -16,8 +16,9 @@ Cowley-Moody Multislice 算法（SimulaTEM 核心计算逻辑的 Python 实现�
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterator, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 
@@ -59,6 +60,14 @@ class ExitWave:
 # ----------------------------------------------------------------------
 # 内部工具
 # ----------------------------------------------------------------------
+# 非周期结构建议的最小真空边距：Peng 表宽尾相位核截断半径可达 ~8 Å，
+# 边距不足时核与周期化传播会把边缘信号回绕进视场
+_MIN_VACUUM_PADDING_A = 8.0
+
+# 相位核高斯截断指数阈值默认值（与历史口径一致）
+_DEFAULT_KERNEL_CUTOFF = 12.0
+
+
 def _prepare_box(
     structure: Structure, padding: float
 ) -> Tuple[np.ndarray, List[str], float, float, float]:
@@ -94,6 +103,13 @@ def _prepare_box(
         lo, hi = pos.min(axis=0), pos.max(axis=0)
         pos += padding - lo  # 四周留 padding 真空
         lx, ly, lz = (hi - lo) + 2.0 * padding
+        if padding < _MIN_VACUUM_PADDING_A:
+            warnings.warn(
+                f"非周期结构的真空边距 {padding:g} Å 偏小：宽尾相位核（可达 "
+                f"~{_MIN_VACUUM_PADDING_A:g} Å）与周期化传播可能把边缘信号回绕进视场，"
+                f"建议 ≥ {_MIN_VACUUM_PADDING_A:g} Å",
+                stacklevel=2,
+            )
     return pos, list(structure.symbols), lx, ly, lz
 
 
@@ -213,6 +229,129 @@ def _accumulate_phase(
             _add_wrapped(phase, kern, iy, jx)
 
 
+class _SlicePlan(NamedTuple):
+    """Multislice 切片预计算（盒子/网格/切片索引/相位核缓存）。"""
+
+    pos: np.ndarray
+    symbols: List[str]
+    lx: float
+    ly: float
+    lz: float
+    nx: int
+    ny: int
+    sx: float
+    sy: float
+    n_slices: int
+    dz: float
+    slices: List[np.ndarray]
+    kernel_cache: dict
+
+
+def _plan_slices(
+    structure: Structure,
+    scope: Microscope,
+    sampling: Optional[float],
+    gpts: Optional[int],
+    slice_thickness: float,
+    padding: float,
+    kernel_cutoff: float,
+    table: str,
+) -> _SlicePlan:
+    """把盒子/网格/切片索引/相位核缓存一次算清，供物化与惰性两条路径共用。"""
+    pos, symbols, lx, ly, lz = _prepare_box(structure, padding)
+    nx = _grid_size(lx, sampling, gpts)
+    ny = _grid_size(ly, sampling, gpts)
+    sx, sy = lx / nx, ly / ny
+    if gpts is None and abs(sx - sy) > 0.05 * (0.5 * (sx + sy)):
+        # auto 模式下 x/y 采样不应有显著差异（显式 gpts 时各向异性是用户选择，
+        # 且 phase_kernels 已支持矩形像素精确积分）
+        raise ValueError(
+            f"x/y 采样差异过大（{sx:.4f} vs {sy:.4f} Å），请调整采样或 gpts"
+        )
+    n_slices = max(1, int(np.ceil(lz / slice_thickness)))
+    dz = lz / n_slices
+    slices = _slice_indices(pos, lz, n_slices)
+    kernel_cache = {
+        sym: phase_kernels(sym, (sx, sy), scope.gamma_lambda, cutoff=kernel_cutoff, table=table)
+        for sym in sorted(set(symbols))
+    }
+    return _SlicePlan(
+        pos, symbols, lx, ly, lz, nx, ny, sx, sy, n_slices, dz, slices, kernel_cache
+    )
+
+
+def _iter_slice_transmissions(plan: _SlicePlan) -> Iterator[np.ndarray]:
+    """逐切片惰性生成透射函数 t_j = exp(i φ_j)。
+
+    与 build_slice_transmissions 走完全相同的累加代码路径（结果逐位一致），
+    区别仅在于不一次性物化全部切片：调用方逐片消费时，峰值内存从
+    O(n_slices·N²) 降为 O(N²)。
+    """
+    for atom_ids in plan.slices:
+        phase = np.zeros((plan.ny, plan.nx), dtype=float)
+        if len(atom_ids) > 0:
+            _accumulate_phase(
+                phase, plan.pos, plan.symbols, atom_ids, plan.sx, plan.sy, plan.kernel_cache
+            )
+        yield np.exp(1j * phase).astype(np.complex128)
+
+
+# ----------------------------------------------------------------------
+# 010 专属：形状感知的切片计划（与 _plan_slices 的唯一差别是网格解析走
+# _grid_shape——stem_scan 的网格两轴各自向上取 5-光滑数，ny_g ≠ nx_g 是常态，
+# 而 09 真源的 _grid_size/_plan_slices 只收标量 gpts。等真源支持 (ny, nx)
+# 网格后两者收敛；收敛前引擎同步守门对 6 个公共函数逐字比对不受影响。
+# ----------------------------------------------------------------------
+def _plan_slices_shape(
+    structure: Structure,
+    scope: Microscope,
+    sampling: Optional[float],
+    gpts,
+    slice_thickness: float,
+    padding: float,
+    kernel_cutoff: float,
+    table: str,
+) -> _SlicePlan:
+    """_plan_slices 的 (ny, nx) 网格版本，供 STEM 扫描（矩形 FFT 友好网格）使用。"""
+    pos, symbols, lx, ly, lz = _prepare_box(structure, padding)
+    ny, nx = _grid_shape(lx, ly, sampling, gpts)
+    sx, sy = lx / nx, ly / ny
+    if gpts is None and abs(sx - sy) > 0.05 * (0.5 * (sx + sy)):
+        # auto 模式下 x/y 采样不应有显著差异（显式 gpts 时各向异性是用户选择，
+        # 且 phase_kernels 已支持矩形像素精确积分）
+        raise ValueError(
+            f"x/y 采样差异过大（{sx:.4f} vs {sy:.4f} Å），请调整采样或 gpts"
+        )
+    n_slices = max(1, int(np.ceil(lz / slice_thickness)))
+    dz = lz / n_slices
+    slices = _slice_indices(pos, lz, n_slices)
+    kernel_cache = {
+        sym: phase_kernels(sym, (sx, sy), scope.gamma_lambda, cutoff=kernel_cutoff, table=table)
+        for sym in sorted(set(symbols))
+    }
+    return _SlicePlan(
+        pos, symbols, lx, ly, lz, nx, ny, sx, sy, n_slices, dz, slices, kernel_cache
+    )
+
+
+def _build_slice_transmissions_shape(
+    structure: Structure,
+    scope: Microscope,
+    sampling: Optional[float] = 0.05,
+    gpts=None,
+    slice_thickness: float = 2.0,
+    padding: float = 5.0,
+    kernel_cutoff: float = _DEFAULT_KERNEL_CUTOFF,
+    table: str = "peng",
+) -> Tuple[List[np.ndarray], Tuple[float, float], Tuple[float, float, float]]:
+    """build_slice_transmissions 的 (ny, nx) 网格版本（stem_scan 专用，见上）。"""
+    plan = _plan_slices_shape(
+        structure, scope, sampling, gpts, slice_thickness, padding, kernel_cutoff, table
+    )
+    transmissions = list(_iter_slice_transmissions(plan))
+    return transmissions, (plan.sx, plan.sy), (plan.lx, plan.ly, plan.lz)
+
+
 def build_slice_transmissions(
     structure: Structure,
     scope: Microscope,
@@ -220,10 +359,10 @@ def build_slice_transmissions(
     gpts: Optional[int] = None,
     slice_thickness: float = 2.0,
     padding: float = 5.0,
-    kernel_cutoff: float = 12.0,
+    kernel_cutoff: float = _DEFAULT_KERNEL_CUTOFF,
     table: str = "peng",
 ) -> Tuple[List[np.ndarray], Tuple[float, float], Tuple[float, float, float]]:
-    """构造所有薄片的透射函数 t_j(x,y) = exp(i φ_j)。
+    """构造所有薄片的透射函数 t_j(x,y) = exp(i φ_j)（一次性物化）。
 
     Parameters
     ----------
@@ -236,36 +375,18 @@ def build_slice_transmissions(
     transmissions : list of complex ndarray
     sampling : (sx, sy) Å/px
     extent : (lx, ly, lz) Å
+
+    Note
+    ----
+    本函数一次性物化全部切片，内存 O(n_slices·N²)，仅供 STEM 扫描等需要
+    反复遍历透射函数的场景使用；普通 HRTEM 模拟请直接调用 multislice /
+    multislice_series（内部逐切片惰性生成，内存 O(N²)，结果逐位一致）。
     """
-    pos, symbols, lx, ly, lz = _prepare_box(structure, padding)
-
-    ny, nx = _grid_shape(lx, ly, sampling, gpts)
-    sx, sy = lx / nx, ly / ny
-    if gpts is None and abs(sx - sy) > 0.05 * (0.5 * (sx + sy)):
-        # auto 模式下 x/y 采样不应有显著差异（显式 gpts 时各向异性是用户选择，
-        # 且 phase_kernels 已支持矩形像素精确积分）
-        raise ValueError(
-            f"x/y 采样差异过大（{sx:.4f} vs {sy:.4f} Å），请调整采样或 gpts"
-        )
-
-    n_slices = max(1, int(np.ceil(lz / slice_thickness)))
-    dz = lz / n_slices
-    slices = _slice_indices(pos, lz, n_slices)
-
-    gamma_lam = scope.gamma_lambda
-    unique_symbols = sorted(set(symbols))
-    kernel_cache = {
-        sym: phase_kernels(sym, (sx, sy), gamma_lam, cutoff=kernel_cutoff, table=table)
-        for sym in unique_symbols
-    }
-
-    transmissions: List[np.ndarray] = []
-    for atom_ids in slices:
-        phase = np.zeros((ny, nx), dtype=float)
-        if len(atom_ids) > 0:
-            _accumulate_phase(phase, pos, symbols, atom_ids, sx, sy, kernel_cache)
-        transmissions.append(np.exp(1j * phase).astype(np.complex128))
-    return transmissions, (sx, sy), (lx, ly, lz)
+    plan = _plan_slices(
+        structure, scope, sampling, gpts, slice_thickness, padding, kernel_cutoff, table
+    )
+    transmissions = list(_iter_slice_transmissions(plan))
+    return transmissions, (plan.sx, plan.sy), (plan.lx, plan.ly, plan.lz)
 
 
 # ----------------------------------------------------------------------
@@ -315,25 +436,36 @@ def multislice(
     Returns
     -------
     ExitWave
+        出射波。注意：出射波定义在最后一片透射之后再传播了一片 dz 的位置
+        （与 SimulaTEM 口径一致），等效于成像时附加 +dz 过焦；厚度序列
+        multislice_series 报告的捕获厚度同理含此 dz。
     """
     if transmissions is None:
-        transmissions, (sx, sy), (lx, ly, lz) = build_slice_transmissions(
-            structure, scope, sampling, gpts, slice_thickness, padding, table=table
+        # 惰性路径：逐切片生成透射函数，内存 O(N²)；
+        # 逐切片的势场累加与传播在同一循环内进行，progress/取消
+        # 对两个阶段同样有效
+        plan = _plan_slices(
+            structure, scope, sampling, gpts, slice_thickness, padding,
+            _DEFAULT_KERNEL_CUTOFF, table,
         )
-        nx, ny = transmissions[0].shape[1], transmissions[0].shape[0]
+        slice_iter = _iter_slice_transmissions(plan)
+        nx, ny = plan.nx, plan.ny
+        sx, sy = plan.sx, plan.sy
+        lx, ly, lz = plan.lx, plan.ly, plan.lz
+        n_slices, dz = plan.n_slices, plan.dz
     else:
+        slice_iter = iter(transmissions)
         ny, nx = transmissions[0].shape
         pos, symbols, lx, ly, lz = _prepare_box(structure, padding)
         sx, sy = lx / nx, ly / ny
+        n_slices, dz = len(transmissions), lz / len(transmissions)
 
     lam = scope.wavelength
-    n_slices = len(transmissions)
-    dz = lz / n_slices
     prop = _fresnel_propagator(lam, dz, nx, ny, sx, sy)
     bl_mask = _band_limit_mask(nx, ny, sx, sy) if band_limit else None
 
     psi = np.ones((ny, nx), dtype=np.complex128)  # 平面波入射，振幅 1
-    for i, t in enumerate(transmissions):
+    for i, t in enumerate(slice_iter):
         psi *= t
         psi_ft = np.fft.fft2(psi)
         if bl_mask is not None:
@@ -359,19 +491,26 @@ def multislice_series(
     table: str = "peng",
     band_limit: bool = False,
 ) -> List[Tuple[float, ExitWave]]:
-    """厚度序列：构建一次势场、一次传播，在请求的各厚度捕获出射波。
+    """厚度序列：一次势场计划、一次传播，在请求的各厚度捕获出射波。
 
     捕获厚度取最接近请求值的切片边界，返回值为 (实际厚度 Å, ExitWave) 列表，
     按厚度升序排列。structure 应按最大厚度构建（厚度序列无需重复计算势场）。
     table：散射因子表（"peng" 默认 / "gauss3" legacy，见 build_slice_transmissions）；
     band_limit：反混叠带限（默认关，见 multislice）。
+
+    Note
+    ----
+    与 multislice 相同，每个捕获波在最后一片透射后多传播一片 dz；
+    报告的实际厚度含此 dz。
     """
-    transmissions, (sx, sy), (lx, ly, lz) = build_slice_transmissions(
-        structure, scope, sampling, gpts, slice_thickness, padding, table=table
+    plan = _plan_slices(
+        structure, scope, sampling, gpts, slice_thickness, padding,
+        _DEFAULT_KERNEL_CUTOFF, table,
     )
-    n_slices = len(transmissions)
-    dz = lz / n_slices
-    ny, nx = transmissions[0].shape
+    slice_iter = _iter_slice_transmissions(plan)
+    n_slices, dz = plan.n_slices, plan.dz
+    ny, nx = plan.ny, plan.nx
+    sx, sy, lx, ly = plan.sx, plan.sy, plan.lx, plan.ly
     lam = scope.wavelength
     prop = _fresnel_propagator(lam, dz, nx, ny, sx, sy)
     bl_mask = _band_limit_mask(nx, ny, sx, sy) if band_limit else None
@@ -384,7 +523,7 @@ def multislice_series(
 
     psi = np.ones((ny, nx), dtype=np.complex128)
     captured: dict = {}
-    for i, t in enumerate(transmissions):
+    for i, t in enumerate(slice_iter):
         psi *= t
         psi_ft = np.fft.fft2(psi)
         if bl_mask is not None:

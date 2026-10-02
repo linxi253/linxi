@@ -111,3 +111,5 @@ reports/*.png
 Thumbs.db
 Desktop.ini
 .DS_Store
+# Windows 保留设备名误生成的残留文件（如 `命令 > nul`）
+nul
