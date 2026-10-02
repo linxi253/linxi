@@ -1,0 +1,22 @@
+# -*- coding: utf-8 -*-
+# 10-DSH集成（TEM 原位视频流水线）运行依赖——只声明第三方（PyPI）依赖。
+#
+# tem_pipeline.py 复用的两份代码不是 pip 包，而是仓库内源码，由
+# load_tools() 经 sys.path 注入后延迟 import（只读引用、不安装、不改源码）：
+#   - video_extractor  <仓库根>\01-视频与数据提取\视频切片工具\video_extractor\
+#   - drift_core       <仓库根>\02-图像处理\drift-correction-v7\drift_core.py
+# 因此它们不出现在本清单，也不要往这里加它们的"安装项"。
+#
+# 版本区间取两份上游锁定文件的交集：下界 = 锁定的精确版本（保证解析结果
+# 与两个被复用工具实测过的版本一致），上界沿用 drift-correction-v7 的范围约定：
+#   视频切片工具\requirements.lock         numpy==2.2.6、tifffile==2025.5.10
+#   drift-correction-v7\requirements.lock  numpy==2.2.6、opencv-python==5.0.0.93、
+#                                          matplotlib==3.10.9、tifffile==2025.5.10
+#
+# Python：两上游 requires-python 的交集为 >=3.11,<3.13（视频切片工具
+# >=3.11,<3.14；drift-correction-v7 >=3.10,<3.13），venv 请以 3.11/3.12 为母本。
+
+numpy>=2.2.6,<3
+opencv-python>=5.0.0.93,<6
+tifffile>=2025.5.10,<2027
+matplotlib>=3.10.9,<4

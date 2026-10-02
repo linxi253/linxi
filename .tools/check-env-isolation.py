@@ -127,15 +127,19 @@ def check_projects() -> None:
         if key in DEFERRED:
             print(f"    skip  {key}\n          {DEFERRED[key]}")
             continue
-        if not (proj / "requirements.txt").is_file() and \
-                not any((proj / n).is_dir() for n in VENV_NAMES):
-            continue                       # pyproject-only, no env expected
-
         venvs = [proj / n for n in VENV_NAMES if (proj / n).is_dir()]
+        sub_locks = [p for p in proj.glob("requirements/*lock*") if p.is_file()]
+        if not (proj / "requirements.txt").is_file() and not venvs and not sub_locks:
+            # pyproject-only project, no env expected -- print the reason
+            # instead of skipping silently
+            print(f"    skip  {rel}: pyproject-only (no requirements.txt, "
+                  "no venv, no requirements/ lock) - no env expected")
+            continue
+
         locks = [p for p in proj.iterdir()
                  if p.is_file() and "lock" in p.name.lower()
                  and p.suffix in (".txt", ".lock")]
-        locks += [p for p in proj.glob("requirements/*lock*") if p.is_file()]
+        locks += sub_locks
 
         issues = []
         if not venvs:
@@ -249,46 +253,87 @@ def check_lock_fidelity() -> None:
     Only locks carrying the generated header are compared: hand-maintained
     locks (pip-compile style, curated subsets, cu128 variants) legitimately
     describe a different set than what is currently installed.
+
+    Coverage is the full set of lock files -- top-level ``requirements*.lock*``
+    plus everything inside a project's ``requirements/`` subdirectory (e.g.
+    the 原子中心识别模型开发 locks) -- checked against every venv name in
+    VENV_NAMES, not just the ``requirements.lock.txt`` + ``.venv`` pair. A
+    lock passes when at least one project-local venv's ``pip freeze`` matches
+    it exactly.
     """
     print("\n[5] venv matches its auto-generated lock")
     checked = 0
-    for lock in sorted(ROOT.rglob("requirements.lock.txt")):
-        if skipped(lock):
-            continue
+    hand_maintained: list[Path] = []
+
+    def is_lock_candidate(p: Path) -> bool:
+        try:
+            if not p.is_file():
+                return False
+        except OSError:
+            # Windows reserved names (e.g. a stray `nul`) raise WinError 1
+            # on stat; ignore them instead of aborting the whole audit
+            return False
+        return ("lock" in p.name.lower() and p.suffix in (".txt", ".lock")
+                and (p.parent.name == "requirements"
+                     or p.name.startswith("requirements"))
+                and not skipped(p))
+
+    lock_paths = sorted(p for p in ROOT.rglob("*") if is_lock_candidate(p))
+    for lock in lock_paths:
         text = lock.read_text(encoding="utf-8", errors="replace")
         if "自动生成，请勿手改" not in text:
+            hand_maintained.append(lock)
             continue
-        proj = lock.parent
-        venv = proj / ".venv"
-        py = venv / "Scripts" / "python.exe"
-        if not py.is_file():
-            continue
+        proj = lock.parent.parent if lock.parent.name == "requirements" \
+            else lock.parent
+        rel = proj.relative_to(ROOT)
         locked = sorted({l.strip() for l in text.splitlines()
                          if l.strip() and not l.startswith("#")})
-        r = run([str(py), "-m", "pip", "freeze"])
-        # Editable installs of the project itself are reported by pip freeze as
-        # a "# Editable install ..." comment plus an "-e <path>" line. They are
-        # not third-party dependencies and are deliberately absent from the
-        # lock, so they must be filtered out or every editable project would
-        # report a false mismatch. (The path is written in the locale encoding,
-        # so it is not even valid UTF-8 -- run() already decodes with
-        # errors="replace", and we drop the line right after.)
-        installed = sorted({
-            l.strip() for l in r.stdout.splitlines()
-            if l.strip() and not l.startswith("#") and not l.startswith("-e ")
-            and re.split(r"[=<>\s]", l.strip(), 1)[0].lower()
-            not in ("pip", "setuptools", "wheel")
-        })
-        diff = set(installed) ^ set(locked)
+        venvs = [proj / n for n in VENV_NAMES
+                 if (proj / n / "Scripts" / "python.exe").is_file()]
+        if not venvs:
+            print(f"    info  {rel}: {lock.name} but no runnable venv "
+                  "(venv presence is [2]'s job)")
+            continue
+        matched = None
+        best_diff: set[str] | None = None
+        for venv in venvs:
+            r = run([str(venv / "Scripts" / "python.exe"), "-m", "pip", "freeze"])
+            # Editable installs of the project itself are reported by pip freeze as
+            # a "# Editable install ..." comment plus an "-e <path>" line. They are
+            # not third-party dependencies and are deliberately absent from the
+            # lock, so they must be filtered out or every editable project would
+            # report a false mismatch. (The path is written in the locale encoding,
+            # so it is not even valid UTF-8 -- run() already decodes with
+            # errors="replace", and we drop the line right after.)
+            installed = sorted({
+                l.strip() for l in r.stdout.splitlines()
+                if l.strip() and not l.startswith("#") and not l.startswith("-e ")
+                and re.split(r"[=<>\s]", l.strip(), 1)[0].lower()
+                not in ("pip", "setuptools", "wheel")
+            })
+            diff = set(installed) ^ set(locked)
+            if not diff:
+                matched = venv
+                break
+            if best_diff is None or len(diff) < len(best_diff):
+                best_diff = diff
         checked += 1
-        if diff:
-            problems.append(f"{proj.relative_to(ROOT)}: venv differs from "
-                            f"{lock.name} by {len(diff)} package(s)")
-            print(f"    FAIL  {proj.relative_to(ROOT)}")
-            for item in sorted(diff)[:6]:
-                print(f"          {item}")
+        if matched is not None:
+            print(f"    ok    {rel} ({len(locked)} pkgs, {matched.name})")
         else:
-            print(f"    ok    {proj.relative_to(ROOT)} ({len(locked)} pkgs)")
+            problems.append(f"{rel}: no venv in {', '.join(VENV_NAMES)} matches "
+                            f"{lock.name} ({len(best_diff)} package(s) differ)")
+            print(f"    FAIL  {rel}: nothing in {', '.join(VENV_NAMES)} "
+                  f"matches {lock.name}")
+            for item in sorted(best_diff)[:6]:
+                print(f"          {item}")
+    if hand_maintained:
+        shown = ", ".join(str(p.relative_to(ROOT)) for p in hand_maintained[:4])
+        more = "" if len(hand_maintained) <= 4 \
+            else f" ... (+{len(hand_maintained) - 4} more)"
+        print(f"    info  {len(hand_maintained)} hand-maintained lock(s) not "
+              f"compared (no auto header): {shown}{more}")
     if not checked:
         print("    info  no auto-generated locks found")
 

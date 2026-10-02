@@ -3,8 +3,12 @@
 
 Design notes
 ------------
-* The base interpreter is the existing Miniconda 3.10 (used only as the venv
-  *seed*). Nothing is ever installed into it.
+* The base interpreter (the venv *seed*) is resolved at startup: the
+  ``AIFORTEM_BASE_PY`` environment variable wins, then a list of common
+  Miniconda / conda-env / CPython install locations is probed; the first
+  candidate whose interpreter runs and reports Python >= 3.10 is used, and a
+  clear error is raised before any side effect if none qualifies. Nothing is
+  ever installed into it.
 * Each project gets its own ``.venv`` so a tool can never see another tool's
   site-packages.
 * requirements files in this workspace mix UTF-8 and GBK encodings, so they are
@@ -16,6 +20,8 @@ Design notes
 from __future__ import annotations
 
 import concurrent.futures as futures
+import functools
+import os
 import re
 import subprocess
 import sys
@@ -23,7 +29,26 @@ import tempfile
 import time
 from pathlib import Path
 
-BASE_PY = Path(r"C:\ProgramData\Miniconda3\python.exe")
+# venv seed interpreter: env var wins, then common locations; every candidate
+# must run and report Python >= 3.10 (all projects here require >= 3.10).
+# See resolve_base_python().
+MIN_BASE_VERSION = (3, 10)
+BASE_PY_ENV_VAR = "AIFORTEM_BASE_PY"
+BASE_PY_CANDIDATES = (
+    r"C:\ProgramData\Miniconda3\python.exe",
+    r"C:\ProgramData\Anaconda3\python.exe",
+    "~/miniconda3/python.exe",
+    "~/anaconda3/python.exe",
+    "~/.conda/envs/py312/python.exe",   # 常见 conda 用户级环境（不存在时自动跳过）
+    "~/AppData/Local/Programs/Python/Python313/python.exe",
+    "~/AppData/Local/Programs/Python/Python312/python.exe",
+    "~/AppData/Local/Programs/Python/Python311/python.exe",
+    "~/AppData/Local/Programs/Python/Python310/python.exe",
+    r"C:\Python313\python.exe",
+    r"C:\Python312\python.exe",
+    r"C:\Python311\python.exe",
+    r"C:\Python310\python.exe",
+)
 ROOT = Path(__file__).resolve().parent.parent
 MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 FALLBACK_INDEX = "https://pypi.org/simple"
@@ -79,6 +104,11 @@ JOBS = [
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "scipy", "matplotlib", "PIL", "tifffile", "ase",
       "ttkbootstrap", "pyfftw"]),
+    # video_extractor 要求 Python>=3.11：base 母本须为 3.11/3.12
+    # （本机即 py312，或用 AIFORTEM_BASE_PY 指定），否则依赖装得上、提取阶段跑不了。
+    ("10-DSH集成(TEM视频流水线)", r"10-DSH集成", ".venv",
+     "requirements.txt", "requirements.lock.txt",
+     ["numpy", "cv2", "tifffile", "matplotlib"]),
     ("开发中-01-原位数据集", r"开发中\01-原位数据集", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "tifffile", "matplotlib"]),
@@ -151,6 +181,67 @@ def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     )
 
 
+def _interpreter_version(py: Path) -> tuple[int, int] | None:
+    """Return (major, minor) if the interpreter runs, else None."""
+    r = run([str(py), "-c", "import sys;print(sys.version_info.major, sys.version_info.minor)"])
+    if r.returncode != 0:
+        return None
+    try:
+        major, minor = (int(part) for part in r.stdout.split()[:2])
+    except ValueError:
+        return None
+    return major, minor
+
+
+def resolve_base_python() -> Path:
+    """Pick the venv seed interpreter: env var first, then common locations.
+
+    A candidate qualifies only if it runs and reports Python >= 3.10. A bad
+    *env-var* candidate is an explicit user decision, so it exits with a clear
+    error instead of silently falling back; probed candidates that fail are
+    skipped. If nothing qualifies, exit with a clear, actionable error --
+    before any venv, install or lock file is touched.
+    """
+    candidates: list[Path] = []
+    env_value = os.environ.get(BASE_PY_ENV_VAR, "").strip()
+    if env_value:
+        candidates.append(Path(env_value).expanduser())
+    candidates += [Path(p).expanduser() for p in BASE_PY_CANDIDATES]
+    candidates.append(Path(sys.executable))   # interpreter running this script
+
+    tried: list[str] = []
+    for i, cand in enumerate(candidates):
+        reason = None
+        if not cand.is_file():
+            reason = "文件不存在"
+        else:
+            ver = _interpreter_version(cand)
+            if ver is None:
+                reason = "无法运行或版本不可读"
+            elif ver < MIN_BASE_VERSION:
+                reason = (f"Python {ver[0]}.{ver[1]} < "
+                          f"{MIN_BASE_VERSION[0]}.{MIN_BASE_VERSION[1]}，不满足")
+        if reason is None:
+            return cand
+        tried.append(f"  - {cand}（{reason}）")
+        if i == 0 and env_value:
+            # 显式指定的解释器不合格：立即报错，绝不静默换用其它解释器
+            raise SystemExit(
+                f"[provision-envs] {BASE_PY_ENV_VAR} 指向的解释器不合格"
+                f"（{reason}），已退出（未创建/改动任何环境）。\n"
+                f"  {cand}\n"
+                f"处理办法：修正 {BASE_PY_ENV_VAR}，或删除该环境变量改用自动探测。"
+            )
+    raise SystemExit(
+        f"[provision-envs] 未找到 Python >= {MIN_BASE_VERSION[0]}."
+        f"{MIN_BASE_VERSION[1]} 的母本解释器，已退出（未创建/改动任何环境）。\n"
+        "探测记录（按顺序）：\n" + "\n".join(tried) + "\n"
+        f"处理办法：设置环境变量 {BASE_PY_ENV_VAR} 指向一个合格解释器后重跑，例如：\n"
+        f"  set {BASE_PY_ENV_VAR}=%USERPROFILE%\\.conda\\envs\\py312\\python.exe\n"
+        "或在上述常见位置安装 Miniconda / Python >= 3.10。"
+    )
+
+
 def pip_install(py: Path, req: Path, cwd: Path) -> tuple[bool, str]:
     base = [str(py), "-X", "utf8", "-m", "pip", "install",
             "--disable-pip-version-check", "--no-input", "-q"]
@@ -192,7 +283,7 @@ def write_lock(py: Path, dest: Path, source: str, venv: str) -> int:
     return len(lines)
 
 
-def provision(job) -> dict:
+def provision(job, base_py: Path) -> dict:
     name, rel, venv, source, lock_out, verify = job
     proj = ROOT / rel
     venv_dir = proj / venv
@@ -211,7 +302,7 @@ def provision(job) -> dict:
 
         # 1. venv
         if not py.is_file():
-            r = run([str(BASE_PY), "-m", "venv", str(venv_dir)])
+            r = run([str(base_py), "-m", "venv", str(venv_dir)])
             if r.returncode != 0:
                 result["detail"] = "venv creation failed: " + r.stdout[-500:]
                 return result
@@ -264,14 +355,15 @@ def provision(job) -> dict:
 
 
 def main() -> int:
-    log(f"base interpreter : {BASE_PY}")
+    base_py = resolve_base_python()
+    log(f"base interpreter : {base_py}")
     log(f"index            : {MIRROR}")
     log(f"jobs             : {len(JOBS)}")
     log("=" * 78)
 
     results = []
     with futures.ThreadPoolExecutor(max_workers=3) as pool:
-        for res in pool.map(provision, JOBS):
+        for res in pool.map(functools.partial(provision, base_py=base_py), JOBS):
             results.append(res)
             flag = "OK  " if res["ok"] else "FAIL"
             log(f"[{flag}] {res['name']:<26} {res['detail']}")

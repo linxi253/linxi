@@ -6,7 +6,7 @@
 - 视频切片工具：`<仓库根>\01-视频与数据提取\视频切片工具\video_extractor`
 - 漂移矫正 v7：`<仓库根>\02-图像处理\drift-correction-v7\drift_core.py`
 
-环境要求：Python 3.10-3.12（本机 Miniconda base：Python 3.10.9）+ numpy / opencv / tifffile / matplotlib，均已满足；ffmpeg 由切片工具自带（`tools\ffmpeg`），无需额外安装。
+环境要求：与仓库其它工具一致，使用**项目内独立 venv**（不要在 Miniconda base 或 PATH 上的 python 直接运行）。Python 3.11-3.12（video_extractor 要求 `>=3.11`、drift_core 要求 `<3.13`）；第三方依赖见 `requirements.txt`（numpy / opencv-python / tifffile / matplotlib），推荐用 `.tools\provision-envs.py` 一键建 `.venv` 并生成 `requirements.lock.txt`，手动等价写法：`python -m venv .venv` 后 `.venv\Scripts\python -m pip install -r requirements.txt`。ffmpeg 由切片工具自带（`tools\ffmpeg`），无需额外安装。
 
 ## 用法一：DSH 工具（推荐）
 
