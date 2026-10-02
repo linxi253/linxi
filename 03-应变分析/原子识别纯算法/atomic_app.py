@@ -2468,9 +2468,15 @@ class AtomicRecognitionApp:
 
     @staticmethod
     def _part_path(path: str | Path) -> Path:
-        """原子写入的临时同目录路径：写入成功后 os.replace 到目标。"""
+        """原子写入的临时同目录路径：写入成功后 os.replace 到目标。
+
+        临时名保留目标真实扩展名（如 xxx.png -> xxx.tmp.png），
+        否则 Pillow 等按扩展名推断格式的保存方写临时文件时
+        会因 .part 后缀抛 unknown file extension。
+        """
         target = Path(path).absolute()
-        return target.with_name(target.name + ".part")
+        suffix = target.suffix or ".part"
+        return target.with_name(f"{target.stem}.tmp{suffix}")
 
     def save_current_marked_image(self) -> None:
         if self.stack is None:
