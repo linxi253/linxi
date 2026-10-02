@@ -28,8 +28,11 @@ jobs:
 
       - name: Ruff lint
         # 只挑「真错误」：E9 语法/运行时、F63 无效 __all__、F7 类型注释语法、F82 未定义名。
-        # 不跑 ruff 默认全量规则集：各子项目自带 [tool.ruff] 配置，全量会累计数千条既有
-        # 风格告警（UP006/I001/BLE001…），不适合在引入 CI 的第一步就全部卡红。
+        # 不跑 ruff 默认全量规则集：19 条矩阵腿中仅 5 个的 pyproject.toml 带
+        # [tool.ruff] 配置（drift-correction-v7、hrtem-HRTEM滤波工具、stem-optimize、
+        # EELS边缘价态分析、全整合），其余 14 个没有——全量规则下这些项目会按 ruff
+        # 默认值累计数千条既有风格告警（UP006/I001/BLE001…），不适合在引入 CI 的
+        # 第一步就全部卡红。
         #
         # 注意：ruff 会把 `x=1;match=y` 误判为 E999（把 match 当软关键字语句），这是 ruff
         # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法。真语法错误由下面的
@@ -51,7 +54,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true }
+          # 审计条目 46：该项目 requires-python = ">=3.11,<3.14"，其 .venv/锁在
+          # Python 3.12.14 上验证（见 环境隔离说明.md 第 3 节），故显式 py: '3.12'；
+          # 其余项目的锁文件头部均标注按 Python 3.10（多数为 3.10.9）生成，走下方默认 '3.10'。
+          - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true, py: '3.12' }
           - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7' }
           - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具' }
           # 该项目的锁文件是 Windows + CPython 3.10 + --require-hashes，必须用 3.10
@@ -59,20 +65,19 @@ jobs:
           - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具' }
           - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具' }
           - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析' }
-          # 测试导入 yaml，但依赖清单未声明 pyyaml（见下方 "Known gaps"）
-          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', deps: 'pyyaml' }
+          # 测试导入 yaml——requirements.txt / pyproject / lock 均已声明 pyyaml
+          # （审计工单 41），无需再用 deps 补装。
+          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA' }
           - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法' }
           # 审计条目 13：仓库里唯一配了完整 pytest 工程却被矩阵遗漏的子项目。
           # pyproject 锁 requires-python >=3.10,<3.11 → 必须用 3.10；src/ 布局
           # 且无 conftest.py，测试前须 editable 安装才能 import atom_center；
           # 无根级 requirements*.txt，依赖随 editable 安装带入；tests 大多不需
           # torch（backends.py 延迟导入，test_onnx_parity 用 importorskip 降级）。
-          # deps 补 opencv（tests 实测需要但 core dependencies 未声明，见 Known gaps）；
-          # test 排除 packaged_smoke 一例（断言捆绑字体注册成功，而仓库刻意不
-          # 收录该 .otf，见 Known gaps）。
+          # deps 补 opencv（tests 实测需要但 core dependencies 未声明，见 Known gaps）。
+          # packaged_smoke 一例已改为按字体资产存在性条件跳过，不再需要 deselect。
           - { name: '03 原子中心识别模型开发', dir: '03-应变分析/原子中心识别模型开发', py: '3.10', editable: true,
-              deps: 'opencv-python==4.11.0.86',
-              test: 'python -m pytest -q --deselect tests/test_annotations.py::test_packaged_smoke_path_exercises_gui_and_export' }
+              deps: 'opencv-python==4.11.0.86' }
           - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
           - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
           - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
@@ -90,7 +95,11 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.py || '3.12' }}
+          # 审计条目 46：默认统一到 3.10。矩阵内除「视频切片工具」（requires-python
+          # >=3.11，上方显式 py: '3.12'）外，其余锁文件头部均标注按 Python 3.10
+          # 生成（多数为 3.10.9；stem-optimize 与原子中心另显式 py: '3.10'）；
+          # 3.12 下这些钉死版本的轮子可用性未经锁层面保证。
+          python-version: ${{ matrix.py || '3.10' }}
           cache: pip
 
       - name: Provide FFmpeg 8.x (required by 视频切片工具, >= 8.0.3)
@@ -98,10 +107,25 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # BtbN 的 latest 别名指向 8.1 系列，与 tools/ffmpeg/PROVENANCE.md 记录的主线一致
+          # 审计条目 63：CI 不得静默使用与 tools/ffmpeg/PROVENANCE.md 不一致的构建。
+          # 旧钉住的发布标签 autobuild-2026-08-21-13-40 已被上游删除（2026-10-02 实测
+          # 下载链接与 GitHub API 均返回 404），2026-10-02 已重钉到当时 latest 的构建
+          # n8.1.3-14-g330caae0c1-20261001，并同步 PROVENANCE.md 与本地 tools/ffmpeg。
+          # latest 别名未来仍会漂移：本步骤对归档做 SHA-256 强校验，上游一发布新构建
+          # 本步骤就会显式失败，提示复核新构建并重钉 PROVENANCE.md（连同本地二进制
+          # 与 build.ps1 的逐文件哈希），杜绝「用漂移来的二进制跑测试却报绿」的供应链缺口。
           $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip'
+          # tools/ffmpeg/PROVENANCE.md 钉住的归档 SHA-256（与分发侧 build.ps1 同源）
+          $expected = 'a8fbc540821511f2720763bb59aad8738cd2fc8b0e4677ea1795d4b6b6cc9b77'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $expected) {
+            throw ("下载的 FFmpeg 归档 SHA-256 为 $hash，与 tools/ffmpeg/PROVENANCE.md 钉住的构建" +
+                   "（$expected，n8.1.3-14-g330caae0c1-20261001）不一致——上游 latest 已漂移，" +
+                   "拒绝使用未校验的二进制。请复核新构建并同步更新 PROVENANCE.md（与本地 tools/ffmpeg、" +
+                   "build.ps1 的逐文件哈希一起），让 CI 与分发重新对齐后重跑。")
+          }
           $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
           Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
           $inner = Get-ChildItem $extract -Directory | Select-Object -First 1
@@ -125,7 +149,20 @@ jobs:
           ) | Where-Object { Test-Path $_ } | Select-Object -First 1
           Write-Host "using requirements: $lock"
           if ($lock) { python -m pip install -r $lock }
-          python -m pip install pytest ${{ matrix.deps }}
+          # 工单38：原先的裸 `pip install pytest` 会把锁文件钉住的 pytest
+          # 无条件覆盖成最新版（05 4D-STEM 曾锁 pytest==9.1.1，CI 实际又装上
+          # 更新的 9.x，与 requirements.txt 的声明区间脱节）。改为仅当按锁
+          # 安装后 pytest 仍缺席时才安装；matrix.deps 仍照常补装。
+          $PSNativeCommandUseErrorActionPreference = $false
+          $deps = '${{ matrix.deps }}'.Trim()
+          python -c "import pytest" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "pytest already provided by $lock; skip bare install"
+            if ($deps) { python -m pip install $deps }
+          } else {
+            if ($deps) { python -m pip install pytest $deps }
+            else { python -m pip install pytest }
+          }
 
       # src/ 布局的项目（原子中心识别模型开发）无 conftest.py 兜底 import，
       # pytest 收集前必须先可编辑安装出 atom_center 包（审计条目 13）
@@ -133,6 +170,49 @@ jobs:
         if: matrix.editable
         working-directory: ${{ matrix.dir }}
         run: python -m pip install -e .
+
+      # 工单38守门（修法第 3 步）：实际安装的 pytest 必须落在该子项目
+      # requirements.txt 声明的版本区间内，防止锁与声明再次漂移
+      # （05 4D-STEM 曾声明 pytest<9，锁却装 9.1.1，又被裸装覆盖）。
+      # 未声明 pytest 或 pytest 未安装的子项目自动跳过；遇到本断言
+      # 不支持的版本运算符立即报错，不做静默放行。
+      - name: Assert pytest matches declared range
+        working-directory: ${{ matrix.dir }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 原生命令 stderr 重写为错误记录的行为仅存在于 Windows PowerShell 5.1，
+          # pwsh 7 默认关闭；此处显式关闭以兼容任何宿主配置。
+          $PSNativeCommandUseErrorActionPreference = $false
+          if (-not (Test-Path requirements.txt)) { Write-Host '无 requirements.txt，跳过断言'; exit 0 }
+          $req = Select-String -Path requirements.txt -Pattern '^\s*pytest\s*([=<>!~].*?)\s*$' | Select-Object -First 1
+          if (-not $req) { Write-Host 'requirements.txt 未声明 pytest，跳过断言'; exit 0 }
+          $spec = (($req.Matches[0].Groups[1].Value) -split ';')[0].Trim()
+          $probe = python -m pytest --version 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $probe) { Write-Host 'pytest 未安装，跳过断言'; exit 0 }
+          $ver = (($probe | Select-Object -First 1) -replace '^pytest\s+', '').Trim()
+          foreach ($c in ($spec -split ',')) {
+            if (-not $c.Trim()) { continue }
+            if ($c -notmatch '^\s*(>=|<=|==|!=|>|<)\s*([0-9.]+)\s*$') {
+              throw "requirements.txt 的 pytest 约束 '$($c.Trim())' 含本断言不支持的运算符，请人工核对"
+            }
+            $op = $Matches[1]
+            # [version] 至少要求 major.minor 两段，单段上界（如 <10）须补 .0
+            $boundText = $Matches[2]
+            if ($boundText -notmatch '\.') { $boundText = "$boundText.0" }
+            $bound = [version]$boundText
+            $cur = [version]$ver
+            $ok = switch ($op) {
+              '>=' { $cur -ge $bound }
+              '>'  { $cur -gt $bound }
+              '<=' { $cur -le $bound }
+              '<'  { $cur -lt $bound }
+              '==' { $cur -eq $bound }
+              '!=' { $cur -ne $bound }
+            }
+            if (-not $ok) { throw "pytest $ver 不满足 requirements.txt 声明的区间 $spec" }
+          }
+          Write-Host "pytest $ver 满足 requirements.txt 声明的区间 $spec"
 
       - name: Run tests
         working-directory: ${{ matrix.dir }}
@@ -165,15 +245,17 @@ jobs:
         run: python .tools/check_engine_sync.py
 
 # Known gaps found by this workflow (not fixed here — see repository issues):
-#   1. 03-应变分析/原子级应力分析-PPA 的测试导入 yaml，但 requirements*.txt / lock 均未声明 pyyaml。
+#   1. 【已解决 2026-10-02】03-应变分析/原子级应力分析-PPA 的 yaml 依赖已在
+#      requirements.txt / pyproject.toml / lock 中声明（审计工单 41），
+#      矩阵行不再用 deps 补装。
 #   2. 010-STEM模拟/tests/test_e2e_au.py 用 test_* 命名但不具 pytest 结构（函数间靠返回值串联），
 #      故 CI 改跑 README 记录的 tests/verify_physics.py。
 #   3. 03-应变分析/原子中心识别模型开发：多个测试经 preprocessing 懒加载 import cv2，
 #      但 pyproject core dependencies 未声明 opencv（只在 [infer]/[train] extras 里），
 #      CI 用 deps=opencv-python==4.11.0.86 补齐（与其 extras 的 pin 一致）。
 #   4. 03-应变分析/原子中心识别模型开发 tests/test_annotations.py::
-#      test_packaged_smoke_path_exercises_gui_and_export 断言捆绑字体
-#      (assets/NotoSansCJKsc-AtomAnnotator.otf) 注册成功，但仓库为控制体积未收录
-#      该 .otf（仅存 FONT_SOURCE.txt 与 OFL.txt，见其下载指引），configure_bundled_font()
-#      在任何一次干净检出上都返回 False——该断言在仓库现状下恒失败，CI 将其 deselect，
-#      待字体回补或测试改为按资产存在性跳过后恢复。
+#      test_packaged_smoke_path_exercises_gui_and_export 曾断言捆绑字体
+#      (assets/NotoSansCJKsc-AtomAnnotator.otf) 注册成功，而仓库为控制体积未收录
+#      该 .otf（仅存 FONT_SOURCE.txt 与 OFL.txt，见其下载指引）。现测试已改为按
+#      资产存在性条件跳过：资产在场才断言注册成功，否则 pytest.skip——CI 不再
+#      deselect 该用例（字体回补后断言自动恢复生效）。

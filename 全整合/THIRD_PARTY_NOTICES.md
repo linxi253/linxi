@@ -31,7 +31,7 @@ preload=("gpa", "phase", "utils", "dm_reader", "strain_analysis")
 
 | 加载方式 | 工具 |
 |---|---|
-| `subprocess`（`sys.executable -m <module>`，另起进程） | `03-应变分析/原子中心识别模型开发`、`04-统计分析/特征区域演化分析` |
+| `subprocess`（另起独立进程；解释器优先取项目自带 `.venv`，缺失时回退套件解释器） | `03-应变分析/原子中心识别模型开发`、`04-统计分析/特征区域演化分析` |
 | `embed`（同一进程内 `import` + `preload`） | 其余全部工具，**含 GPL-3.0 的 `03-应变分析/strainpp-GPA应变分析`** |
 
 > 仓库根 `NOTICE.md` 早期版本把调用方式笼统描述为「以子进程/按需加载方式调用」，
@@ -43,7 +43,8 @@ preload=("gpa", "phase", "utils", "dm_reader", "strain_analysis")
 应比照「单一作品」处理 GPL-3.0 的传染性，不能沿用「不复制其代码故不受影响」的表述。
 
 若要消除传染性，可把该条目的 `run_mode` 改为 `"subprocess"`——`registry.py`
-已支持该模式（`app.py` 中会用 `sys.executable -m` 另起进程加载）。
+已支持该模式（`app.py` 会优先以项目自带 `.venv` 解释器、缺失时以套件解释器
+另起进程加载）。
 注意即便改为子进程，若两者仍被打进同一个 exe，依然属于同一分发物。
 
 ## 其它第三方 Python 包

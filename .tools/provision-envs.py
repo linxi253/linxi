@@ -105,26 +105,32 @@ JOBS = [
      ["numpy", "scipy", "matplotlib", "PIL", "tifffile", "ase",
       "ttkbootstrap", "pyfftw"]),
     # video_extractor 要求 Python>=3.11：base 母本须为 3.11/3.12
-    # （本机即 py312，或用 AIFORTEM_BASE_PY 指定），否则依赖装得上、提取阶段跑不了。
+    # （resolve_base_python 的版本校验会自动跳过不合格的探测候选；
+    # 也可用 AIFORTEM_BASE_PY 显式指定），否则依赖装得上、提取阶段跑不了。
     ("10-DSH集成(TEM视频流水线)", r"10-DSH集成", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "cv2", "tifffile", "matplotlib"]),
-    ("开发中-01-原位数据集", r"开发中\01-原位数据集", ".venv",
-     "requirements.txt", "requirements.lock.txt",
-     ["numpy", "tifffile", "matplotlib"]),
-    ("开发中-02-对象追踪与动力学", r"开发中\02-对象追踪与动力学", ".venv",
-     "requirements.txt", "requirements.lock.txt",
-     ["numpy", "tifffile", "matplotlib"]),
-    ("开发中-03-漂移矫正升级", r"开发中\03-漂移矫正升级", ".venv",
-     "requirements.txt", "requirements.lock.txt",
-     ["numpy", "tifffile", "matplotlib"]),
-    ("开发中-05-帧质量与事件检测", r"开发中\05-帧质量与事件检测", ".venv",
-     "requirements.txt", "requirements.lock.txt",
-     ["numpy", "tifffile", "matplotlib"]),
-    ("开发中-自动识别晶面取向", r"开发中\自动识别晶面取向", ".venv",
-     "requirements.lock.txt", None,
-     ["numpy", "scipy", "matplotlib", "cv2", "skimage", "PIL"]),
 ]
+
+# 本机特有的内部/在研项目不写入本公开脚本：需要时把与 JOBS 同构的条目写入一个
+# 本地 JSON 文件（数组，每项为 [name, dir, venv, source, lock_out, [verify
+# imports]]，lock_out 可为 null），并用环境变量 AIFORTEM_PROVISION_EXTRA 指向它；
+# 未设置该变量时只供给上面的仓库内项目，行为不变。
+EXTRA_JOBS_ENV_VAR = "AIFORTEM_PROVISION_EXTRA"
+
+
+def load_extra_jobs() -> list:
+    path_value = os.environ.get(EXTRA_JOBS_ENV_VAR, "").strip()
+    if not path_value:
+        return []
+    import json
+    raw = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
+    extra: list = []
+    for name, rel, venv, source, lock_out, verify in raw:
+        extra.append((str(name), str(rel), str(venv), str(source),
+                      None if lock_out is None else str(lock_out),
+                      [str(module) for module in verify]))
+    return extra
 
 # venv whose freeze becomes the *dev* lock of an existing project
 DEV_LOCKS = [
@@ -237,7 +243,7 @@ def resolve_base_python() -> Path:
         f"{MIN_BASE_VERSION[1]} 的母本解释器，已退出（未创建/改动任何环境）。\n"
         "探测记录（按顺序）：\n" + "\n".join(tried) + "\n"
         f"处理办法：设置环境变量 {BASE_PY_ENV_VAR} 指向一个合格解释器后重跑，例如：\n"
-        f"  set {BASE_PY_ENV_VAR}=%USERPROFILE%\\.conda\\envs\\py312\\python.exe\n"
+        f"  set {BASE_PY_ENV_VAR}=%LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe\n"
         "或在上述常见位置安装 Miniconda / Python >= 3.10。"
     )
 
@@ -322,7 +328,12 @@ def provision(job, base_py: Path) -> dict:
         try:
             ok, err = pip_install(py, tmp, proj)
         finally:
-            tmp.unlink(missing_ok=True)
+            # 兼容老解释器（<3.8）的写法：missing_ok 关键字在旧版会 TypeError，
+            # 导致所有 job 必然 FAIL。
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
         if not ok:
             result["detail"] = "pip install failed: " + err
             return result
@@ -356,14 +367,17 @@ def provision(job, base_py: Path) -> dict:
 
 def main() -> int:
     base_py = resolve_base_python()
+    jobs = JOBS + load_extra_jobs()
     log(f"base interpreter : {base_py}")
     log(f"index            : {MIRROR}")
-    log(f"jobs             : {len(JOBS)}")
+    log(f"jobs             : {len(jobs)}"
+        + (f"（含 {EXTRA_JOBS_ENV_VAR} 额外 {len(jobs) - len(JOBS)} 项）"
+           if len(jobs) != len(JOBS) else ""))
     log("=" * 78)
 
     results = []
     with futures.ThreadPoolExecutor(max_workers=3) as pool:
-        for res in pool.map(functools.partial(provision, base_py=base_py), JOBS):
+        for res in pool.map(functools.partial(provision, base_py=base_py), jobs):
             results.append(res)
             flag = "OK  " if res["ok"] else "FAIL"
             log(f"[{flag}] {res['name']:<26} {res['detail']}")
@@ -377,7 +391,7 @@ def main() -> int:
         if not py.is_file():
             log(f"[SKIP] {name:<26} no {venv}")
             continue
-        n = write_lock(py, proj / out, venv, venv)
+        n = write_lock(py, proj / out, "requirements-dev.txt", venv)
         log(f"[OK  ] {name:<26} {out} ({n} pkgs)")
 
     log("=" * 78)

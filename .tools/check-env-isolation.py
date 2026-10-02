@@ -19,14 +19,47 @@ Exit code 0 = clean, 1 = violations found.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE_PY = Path(r"C:\ProgramData\Miniconda3\python.exe")
+# base（母本）解释器：环境变量 AIFORTEM_BASE_PY 优先，其次探测常见安装位置
+# （与 .tools/provision-envs.py 同一约定）。都不可用时 BASE_PY 为 None，
+# [1]/[6] 两项检查把它作为一条违规报告（不崩溃）。
+BASE_PY_ENV_VAR = "AIFORTEM_BASE_PY"
+_BASE_PY_CANDIDATES = (
+    r"C:\ProgramData\Miniconda3\python.exe",
+    r"C:\ProgramData\Anaconda3\python.exe",
+    "~/miniconda3/python.exe",
+    "~/anaconda3/python.exe",
+    "~/AppData/Local/Programs/Python/Python313/python.exe",
+    "~/AppData/Local/Programs/Python/Python312/python.exe",
+    "~/AppData/Local/Programs/Python/Python311/python.exe",
+    "~/AppData/Local/Programs/Python/Python310/python.exe",
+    r"C:\Python313\python.exe",
+    r"C:\Python312\python.exe",
+    r"C:\Python311\python.exe",
+    r"C:\Python310\python.exe",
+)
+
+
+def _resolve_base_py() -> Path | None:
+    env_value = os.environ.get(BASE_PY_ENV_VAR, "").strip()
+    candidates = [Path(env_value).expanduser()] if env_value else []
+    candidates += [Path(p).expanduser() for p in _BASE_PY_CANDIDATES]
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
+BASE_PY = _resolve_base_py()
 
 VENV_NAMES = (".venv", ".venv-build", ".venv-run")
+# 「08-历史版本」是旧文档约定的本机归档目录名；该目录并不存在于本仓库，
+# 列在此处仅为兼容旧检出布局，目录缺席时跳过逻辑本身无害。
 SKIP_DIR_PARTS = {
     "08-历史版本", "site-packages", "node_modules", "__pycache__", "build",
     "dist", "runs", "legacy", "release", "_internal", ".runtime", ".tools",
@@ -37,13 +70,23 @@ SCRIPT_SUFFIXES = (".bat", ".cmd", ".ps1")
 
 # Nested dependency manifests that intentionally have no environment of their
 # own. Keep this list explicit and justified -- never silence a real gap.
+# 本机特有的内部/在研项目路径不写入本公开脚本：需要时把「相对路径 -> 理由」
+# 写入一个本地 JSON 对象文件，并用环境变量 AIFORTEM_DEFERRED_EXTRA 指向它。
 DEFERRED = {
     r"03-应变分析\原子级应力分析-PPA\atom_detector":
         "深度学习子项目；PPA 稳定版不加载任何 .pt 模型（见其 README），"
         "需要时单独建环境",
-    r"开发中\自动识别晶面取向\diffract_indexer":
-        "该 requirements.txt 是父项目锁的来源，环境为父目录 .venv",
 }
+DEFERRED_EXTRA_ENV_VAR = "AIFORTEM_DEFERRED_EXTRA"
+
+
+def load_deferred_extra() -> dict:
+    path_value = os.environ.get(DEFERRED_EXTRA_ENV_VAR, "").strip()
+    if not path_value:
+        return {}
+    import json
+    raw = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
+    return {str(key): str(reason) for key, reason in raw.items()}
 
 # a bare `python` token: not preceded by a path separator or a $ (PS variable)
 BARE_PYTHON = re.compile(r"(?<![\w\\./\-$])python(?:\.exe)?(?![\w.\-])")
@@ -75,8 +118,12 @@ def decode(path: Path) -> str:
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, encoding="utf-8", errors="replace")
+    try:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, encoding="utf-8", errors="replace")
+    except OSError as exc:
+        # 解释器缺失/无法启动必须转成报告行，而不是让审计脚本本身崩溃
+        return subprocess.CompletedProcess(cmd, 127, f"[OSError] {exc}\n", None)
 
 
 def skipped(path: Path) -> bool:
@@ -85,7 +132,14 @@ def skipped(path: Path) -> bool:
 
 def check_base() -> None:
     print("[1] Miniconda base cleanliness")
-    sp = Path(r"C:\ProgramData\Miniconda3\Lib\site-packages")
+    if BASE_PY is None:
+        problems.append("base interpreter not found "
+                        f"（可用 {BASE_PY_ENV_VAR} 指定）")
+        print("    FAIL  base interpreter not found; set AIFORTEM_BASE_PY "
+              "or install Miniconda/Python >= 3.10 in a common location; "
+              "pip check / leftover-dir scan skipped")
+        return
+    sp = BASE_PY.parent / "Lib" / "site-packages"
     if sp.is_dir():
         junk = [d.name for d in sp.iterdir() if d.is_dir() and d.name.startswith("~")]
         if junk:
@@ -105,7 +159,12 @@ def check_base() -> None:
             print("          " + line)
 
     r = run([str(BASE_PY), "-c", "import sys;print(sys.version.split()[0])"])
-    print(f"    info  base interpreter Python {r.stdout.strip()}")
+    if r.returncode == 0:
+        print(f"    info  base interpreter Python {r.stdout.strip()}")
+    else:
+        problems.append("base interpreter does not run: "
+                        + r.stdout.strip()[:200])
+        print("    FAIL  base interpreter does not run")
 
 
 def find_projects() -> list[Path]:
@@ -121,11 +180,12 @@ def find_projects() -> list[Path]:
 
 def check_projects() -> None:
     print("\n[2] Project environments")
+    deferred = {**DEFERRED, **load_deferred_extra()}
     for proj in find_projects():
         rel = proj.relative_to(ROOT)
         key = str(rel)
-        if key in DEFERRED:
-            print(f"    skip  {key}\n          {DEFERRED[key]}")
+        if key in deferred:
+            print(f"    skip  {key}\n          {deferred[key]}")
             continue
         venvs = [proj / n for n in VENV_NAMES if (proj / n).is_dir()]
         sub_locks = [p for p in proj.glob("requirements/*lock*") if p.is_file()]
@@ -165,6 +225,10 @@ def check_projects() -> None:
                 detail.append(f"{v.name}=LEAKY")
                 continue
             py = v / "Scripts" / "python.exe"
+            if not py.is_file():
+                problems.append(f"{rel}\\{v.name}: missing Scripts/python.exe")
+                detail.append(f"{v.name}=NO_PYTHON")
+                continue
             r = run([str(py), "-c", "import sys;print(sys.version.split()[0])"])
             ver = r.stdout.strip() if r.returncode == 0 else "BROKEN"
             if ver == "BROKEN":
@@ -233,6 +297,11 @@ def check_pip_config() -> None:
         problems.append(f"pip.ini is not ASCII-only: {cfg}")
         print(f"    FAIL  {cfg} contains non-ASCII bytes")
         print("          -> pip will reject the whole file; keep it ASCII-only")
+        return
+    if BASE_PY is None:
+        problems.append("base interpreter not found "
+                        f"（可用 {BASE_PY_ENV_VAR} 指定）")
+        print("    FAIL  base interpreter not found; pip config parse check skipped")
         return
     r = run([str(BASE_PY), "-m", "pip", "config", "list"])
     if r.returncode != 0 or "invalid" in r.stdout.lower():

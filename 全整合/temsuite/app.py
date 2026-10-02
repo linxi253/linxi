@@ -30,6 +30,15 @@ from .mplbackend import backend_locked, force_headless_backend
 from .registry import CATEGORIES, TOOLS, ToolSpec, tools_in_category
 from .tkpatch import tk_root_redirected, ttk_theme_frozen
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 logger = logging.getLogger(__name__)
 
 APP_TITLE = "TEM Suite —— 电镜数据分析工具集"
@@ -351,24 +360,42 @@ class SuiteApp:
                 else path_prepend
             )
 
+        # 优先使用项目自带的解释器：各子进程工具的依赖锁定在它们自己的 venv
+        # 里（如原子标注工具锁定 numpy 1.26.4，套件锁为 numpy 2.2.6），复用
+        # 套件解释器会打破其版本契约。缺失时才回退到套件解释器并告警。
+        python_exe = spec.resolve_python_exe()
+        if python_exe is not None:
+            suite_runtime = False
+        else:
+            python_exe = Path(sys.executable)
+            suite_runtime = True
+            logger.warning(
+                "%s 未找到项目自带解释器（%s），回退到套件解释器/运行时 %s —— "
+                "子进程依赖版本可能与该工具自身锁定的版本不一致",
+                spec.name,
+                spec.project_dir / ".venv",
+                python_exe,
+            )
+
         if spec.subprocess_module:
             # 包内使用相对导入的模块无法按脚本路径执行，以 python -m 方式启动
-            if getattr(sys, "frozen", False):
+            if suite_runtime and getattr(sys, "frozen", False):
                 cmd = [sys.executable, "--run-module", spec.subprocess_module]
             else:
-                cmd = [sys.executable, "-m", spec.subprocess_module, *spec.subprocess_args]
+                cmd = [str(python_exe), "-m", spec.subprocess_module, *spec.subprocess_args]
         else:
             script = spec.project_dir / spec.entry
             if not script.is_file():
                 messagebox.showerror("无法启动", f"未找到脚本：\n{script}", parent=self.root)
                 return
 
-            # 打包后 sys.executable 是 TEM Suite.exe 本身而非 python，
-            # 因此以 --run-script 参数让 exe 的另一个实例代为执行目标脚本。
-            if getattr(sys, "frozen", False):
+            # 回退到套件本体时，打包后 sys.executable 是 TEM Suite.exe 本身
+            # 而非 python，因此以 --run-script 参数让 exe 的另一个实例代为
+            # 执行目标脚本；项目自带解释器则可直接运行脚本。
+            if suite_runtime and getattr(sys, "frozen", False):
                 cmd = [sys.executable, "--run-script", str(script)]
             else:
-                cmd = [sys.executable, str(script), *spec.subprocess_args]
+                cmd = [str(python_exe), str(script), *spec.subprocess_args]
 
         try:
             proc = subprocess.Popen(  # noqa: S603 - 路径来自内部注册表
@@ -495,8 +522,10 @@ def main() -> int:
             import ctypes
 
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:  # noqa: BLE001 - 非关键路径
-            pass
+        except Exception as exc:  # noqa: BLE001 - 合理吞除：DPI 感知设置失败
+            # 仅退化为标准 DPI 显示（旧系统/已设置过都会失败），不应阻断启动；
+            # 类型随 Windows 版本而异无法收窄，留 debug 痕迹防真问题被掩盖。
+            logger.debug("SetProcessDpiAwareness 失败（忽略，按标准 DPI 运行）: %s", exc)
 
     if "--self-test" in sys.argv[1:]:
         from .selftest import run_self_test

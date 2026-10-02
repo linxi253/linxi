@@ -56,8 +56,14 @@ Versions are taken from each tool's code constants (`__version__` / `pyproject.t
 - [10-DSH集成](10-DSH集成/README.md): TEM video pipeline driven inside DeepSeek Harness sessions.
 - [全整合](全整合/README.md): source of the TEM Suite integration layer (tool tree + tabs).
 
-> Numbering note: there are two `05-` directories (4D-STEM and EELS) for historical reasons.
-> They were not renumbered, to avoid breaking relative references inside each tool.
+> Numbering note: numbers reflect the order in which directories joined the workspace and are
+> **not contiguous** — `07` and `08` were never created (`08-历史版本` in some older documents
+> refers to an off-repository local archive; no such directory exists in the repository).
+> There are two `05-` directories (4D-STEM and EELS) for historical reasons; they were not
+> renumbered, to avoid breaking relative references inside each tool. `010-STEM模拟` uses a
+> three-digit number meaning "group 10": it sorts lexicographically between `01-` and `02-`,
+> and is unrelated to `10-DSH集成` (a STEM simulation engine vs. a TEM video pipeline); the
+> name is kept for compatibility with hard-coded paths (全整合/temsuite/registry.py, .tools, CI).
 
 ## Running from Source
 
@@ -80,7 +86,7 @@ Then always launch with the project's own interpreter:
 .venv\Scripts\python <entry script.py>
 ```
 
-`09-HRTEM模拟`, `010-STEM模拟` and `原子识别纯算法` provide a `run.bat` — double-click to launch.
+`09-HRTEM模拟` and `010-STEM模拟` provide a `run.bat`; `原子识别纯算法`'s launcher is `启动原子识别工具.bat` — double-click to launch.
 
 Projects with a `.spec` file can be re-packaged with PyInstaller **inside the project's own environment**:
 

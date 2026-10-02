@@ -192,6 +192,7 @@ def run_extraction(video: Path, output_root: Path, args) -> dict:
     stage_in = stage_root / "in"
     stage_out = stage_root / "out"
     staged = None
+    results = None  # try 前置初始化：finally 及后续判断不得引用未绑定变量
     try:
         staged = stage_video(video, stage_in)
         options = ExtractOptions(
@@ -229,14 +230,14 @@ def run_extraction(video: Path, output_root: Path, args) -> dict:
                 pass
         # 只有当提取本身未完成（无输出可移动）时才随手清理 staging；
         # 成功时产物还在 stage 里，由调用方移出后再清理。
-        if not results or any(item.state.value != "completed" for item in results):
+        if results is None or any(item.state.value != "completed" for item in results):
             shutil.rmtree(stage_root, ignore_errors=True)
             try:
                 stage_root.parent.rmdir()
             except OSError:
                 pass
 
-    if not results or any(item.state.value != "completed" for item in results):
+    if results is None or any(item.state.value != "completed" for item in results):
         failed = next((item for item in results if item.state.value == "failed"), results[0] if results else None)
         raise RuntimeError(
             "视频提取失败: " + (failed.error if failed and failed.error else "无结果")

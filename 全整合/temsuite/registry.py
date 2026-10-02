@@ -96,6 +96,10 @@ class ToolSpec:
         ``run_mode="subprocess"`` 且工具需以 ``python -m <module>`` 方式启动时填写的
         模块名（包内使用相对导入的模块无法按脚本路径直接执行）。填写后
         ``entry`` 仅用于 :attr:`available` 校验文件存在，实际启动走本字段。
+    python_exe:
+        显式指定的子进程解释器路径。缺省时自动探测项目自带的 ``.venv``
+        解释器（见 :meth:`resolve_python_exe`），两者都缺失才回退到套件
+        自身解释器。
     """
 
     tool_id: str
@@ -112,6 +116,7 @@ class ToolSpec:
     preload: tuple[str, ...] = ()
     subprocess_args: tuple[str, ...] = ()
     subprocess_module: str = ""
+    python_exe: Path | None = None
     description: str = ""
     notes: str = ""
     _cached_dir: list[Path] = field(default_factory=list, repr=False, compare=False)
@@ -137,6 +142,27 @@ class ToolSpec:
         if self.load_mode == "file":
             return (self.project_dir / self.entry).is_file()
         return True
+
+    def resolve_python_exe(self) -> Path | None:
+        """解析 ``run_mode="subprocess"`` 工具应使用的解释器。
+
+        优先级：显式 :attr:`python_exe` > 项目自带 ``.venv`` 中的解释器 >
+        ``None``（调用方回退到套件自身解释器并告警）。
+
+        各子进程工具的依赖版本锁定在它们自己的 venv 中（如原子标注工具锁定
+        numpy 1.26.4，而套件锁为 numpy 2.2.6），复用套件解释器会打破该
+        版本契约，因此必须优先使用项目解释器。
+        """
+        if self.python_exe is not None:
+            return self.python_exe
+        candidates = (
+            self.project_dir / ".venv" / "Scripts" / "python.exe",
+            self.project_dir / ".venv" / "bin" / "python",
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -189,7 +215,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         factory="DriftCorrectionApp",
         preload=("drift_core",),
         description="v7 合并版：相位互相关 + 纯平移鲁棒中位数匹配的帧间漂移矫正，兼顾文件安全与算法质量。",
-        notes="v7 由 v5.2（安全版）与 v6.1（算法版）合并而来；旧版已归档至 08-历史版本。",
+        notes="v7 由 v5.2（安全版）与 v6.1（算法版）合并而来；旧版归档（08-历史版本）在开发机上，未随本仓库分发。",
     ),
     ToolSpec(
         tool_id="hrtem_filter",
