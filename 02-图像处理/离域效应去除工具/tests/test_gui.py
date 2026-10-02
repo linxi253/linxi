@@ -22,7 +22,10 @@ tifffile = pytest.importorskip("tifffile")
 
 try:
     import main as app_main
-except Exception as exc:  # pragma: no cover - 环境相关
+except (ImportError, tk.TclError) as exc:  # pragma: no cover - 环境相关
+    # 只兜环境类失败：依赖缺失（ImportError）或无显示环境（TclError）。
+    # 代码级异常（SyntaxError/NameError/AttributeError 等）必须直接失败，
+    # 否则 GUI 回归整模块静默假绿。
     pytest.skip(f"无法导入 GUI 模块: {exc}", allow_module_level=True)
 
 import roi_model  # noqa: E402

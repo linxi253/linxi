@@ -135,7 +135,7 @@ ImageJ 信息及源文件 SHA-256。这里只是固定的测试参数，不是�
 
 核心测试的输出写入临时目录并在结束后自动清理。连续叠加多个增强滤镜可能放大噪声或改变定量强度。建议一次只调整少量参数，并保留参数清单。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

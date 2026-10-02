@@ -139,7 +139,7 @@ PyInstaller、运行成品内置 LZW/OME/事务自检，并生成
 
 详细变更见 `CHANGELOG.md`，安全策略见 `SECURITY.md`。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
