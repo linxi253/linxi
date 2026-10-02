@@ -28,7 +28,7 @@
 | 统计分析 | TIF 原子衬度统计 | 2.5.0 | `04-统计分析/原子衬度统计` | `tif图像衬度分析工具.py` |
 | 统计分析 | HAADF-STEM 特征区域演化 | 2026.09.2 | `04-统计分析/特征区域演化分析` | `应力面积统计.py` |
 | 统计分析 | TIFF 面积测量 | — | `04-统计分析/统计面积` | `统计面积.py` |
-| 统计分析 | 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计/pythonProject` | `main.py` |
+| 统计分析 | 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计` | `main.py` |
 | 4D-STEM | 4D-STEM Processor | 2.2.0 | `05-4D-STEM分析/4D-STEM-Processor` | `stem_processor_gui.py` |
 | EELS 谱学 | EELS 边缘价态分析 | 0.2.0 | `05-EELS分析/EELS边缘价态分析工具` | `run.py` |
 | HRTEM 模拟 | HRTEM 高分辨模拟工具（tem_sim 引擎） | 1.2.0 | `09-HRTEM模拟` | `run.bat` |

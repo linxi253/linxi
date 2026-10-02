@@ -33,7 +33,7 @@ Versions are taken from each tool's code constants (`__version__` / `pyproject.t
 | Statistics | TIF atomic contrast statistics | 2.5.0 | `04-统计分析/原子衬度统计` | `tif图像衬度分析工具.py` |
 | Statistics | HAADF-STEM feature-region evolution | 2026.09.2 | `04-统计分析/特征区域演化分析` | `应力面积统计.py` |
 | Statistics | TIFF area measurement | — | `04-统计分析/统计面积` | `统计面积.py` |
-| Statistics | Crystalline/amorphous region statistics | 5.3 | `04-统计分析/非晶面积统计/pythonProject` | `main.py` |
+| Statistics | Crystalline/amorphous region statistics | 5.3 | `04-统计分析/非晶面积统计` | `main.py` |
 | 4D-STEM | 4D-STEM Processor | 2.2.0 | `05-4D-STEM分析/4D-STEM-Processor` | `stem_processor_gui.py` |
 | EELS spectroscopy | EELS edge valence analysis | 0.2.0 | `05-EELS分析/EELS边缘价态分析工具` | `run.py` |
 | HRTEM simulation | HRTEM multislice simulation (tem_sim engine) | 1.2.0 | `09-HRTEM模拟` | `run.bat` |
