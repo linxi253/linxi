@@ -38,8 +38,7 @@ DATA=ROOT/'data/processed/reviewed_targets_20260910'
 def build():
     old,base=verify_dataset(ROOT/'data/processed/real_workflow_20260910_spacing')
     answers=ROOT/'runs/reviewed-test-20260910'
-    plan={'authorization':'User explicitly requested optimizing images with supplied human answers, 04/05; other test images deferred.',
-          'former_test_role':'supervised_adaptation_training','independent_test_claim':False,
+    plan={'former_test_role':'supervised_adaptation_training','independent_test_claim':False,
           'related_0199_field_no_longer_independent_test':True,'original_validation_groups_preserved':True,
           'target_repeats':3,'coverage':'Full-frame supervised fit to all user-provided reference points; 05 explicitly confirmed fully checked. Original exported ROI retained for comparable scoring.',
           'old_dataset_sha256':old['content_sha256']}

@@ -240,11 +240,27 @@ class _DMReader:
                 best = max(images_2d, key=lambda x: x[0].size)
             else:
                 best = max(self._all_images, key=lambda x: x[0].size)
-            self._image_data = best[0]
+            image = best[0]
+            # Unify with the ncempy reference path (_convert_ncempy_result):
+            # a declared multi-frame stack is cut to its first frame, so
+            # read_dm_file returns the same 2D image whether or not ncempy
+            # is installed.
+            while image.ndim > 2:
+                image = image[0]
+            self._image_data = np.ascontiguousarray(image)
             self._metadata['shape'] = self._image_data.shape
 
         if self._image_data is None:
             raise DM3Error("No image data found in DM file.")
+        if self._image_data.ndim != 2:
+            # Mirror the ncempy path (_convert_ncempy_result), which rejects
+            # sub-2D datasets instead of returning a flattened array the
+            # analysis pipeline cannot use (audit ticket 71: the two paths
+            # must agree for the same file).
+            raise DM3Error(
+                "DM dataset is not a 2D image "
+                f"(shape={self._image_data.shape}, no usable dimension tags)."
+            )
 
         # Extract pixel size from calibrations
         if self._calibrations:
@@ -564,6 +580,12 @@ class _DMReader:
                 # Store as potential image data
                 if data.size > 100:  # Ignore small arrays (metadata)
                     shape = self._shape_from_known_dimensions(data.size)
+                    if shape is None:
+                        # A declared multi-frame stack cannot be matched with
+                        # a dimension pair; use the full declared shape so
+                        # read() can cut the first frame like the ncempy
+                        # reference path does.
+                        shape = self._shape_from_declared_dimensions(data.size)
                     if shape is not None:
                         image = data.reshape(shape)
                         self._all_images.append((image, list(shape)))
@@ -642,6 +664,23 @@ class _DMReader:
             width, height = dims[end - 2], dims[end - 1]
             if width * height == total:
                 return height, width
+        return None
+
+    def _shape_from_declared_dimensions(
+            self, total: int) -> Optional[Tuple[int, ...]]:
+        """Return the full (>=3 dim) declared shape, DM order reversed.
+
+        ``_shape_from_known_dimensions`` only matches dimension pairs, so a
+        declared 3D stack used to fall through to the flat 1D payload and
+        read() returned a different shape than the ncempy path (audit
+        ticket 71).  Matching the full declared shape lets read() reshape
+        the stack and slice its first frame.
+        """
+        dims = [int(v) for v in self._image_dimensions if int(v) > 0]
+        for length in range(len(dims), 2, -1):
+            window = dims[len(dims) - length:]
+            if int(np.prod(window)) == total:
+                return tuple(reversed(window))
         return None
 
 

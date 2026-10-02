@@ -107,7 +107,7 @@ $projects = @(Get-ChildItem data/annotation_projects/migrated_20260906 -Filter a
 使用已确认来源的本地预训练权重时：
 
 ```powershell
-.\scripts\atom-center.ps1 train --data data/processed/haadf_v001 --run runs/haadf_pretrained_001 --common configs/common.yaml --modality configs/haadf_stem.yaml --set "training.model=C:/models/yolov8s.pt" --init-sha256 "<已核对的64位SHA-256>"
+.\scripts\atom-center.ps1 train --data data/processed/haadf_v001 --run runs/haadf_pretrained_001 --common configs/common.yaml --modality configs/haadf_stem.yaml --set "training.model=<模型目录>/yolov8s.pt" --init-sha256 "<已核对的64位SHA-256>"
 ```
 
 不自动下载初始化权重。运行目录保存数据指纹、最终配置、源码摘要、环境版本、初始化权重/实际模型张量摘要、best.pt/last.pt、可续训 resume.pt 及训练日志。每次实验使用独立目录。训练只使用 train 与 val；test 不进入模型选择。

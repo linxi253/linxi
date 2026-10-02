@@ -708,8 +708,12 @@ def _interpolate_strain_grids(fields, image_shape, grid_size=200):
         return {}, {}, None
 
     h, w = image_shape
-    x_min, x_max = 0, w - 1
-    y_min, y_max = 0, h - 1
+    # 工单74: 云图 extent 以像素边缘为界 (-0.5 ~ N-0.5)。底图 imshow 用默认
+    # extent, 像素中心在整数坐标、图像盒为 [-0.5, N-0.5]; 若云图盒取 (0, N-1),
+    # 不仅整体内缩半像素, N 个插值单元的中心还与网格节点
+    # linspace(0, N-1, grid_size) 最多错开半个网格(边缘处), 云图相对底图错位。
+    x_min, x_max = -0.5, w - 0.5
+    y_min, y_max = -0.5, h - 0.5
     extent = (x_min, x_max, y_min, y_max)
 
     gx = np.linspace(x_min, x_max, grid_size)
@@ -1413,9 +1417,17 @@ class AtomMarkerApp:
             return self.processed_image
         return self.image
 
-    def _get_work_image(self):
-        """返回用于原子检测的图像（可能为预处理图像）"""
-        if self.use_preprocessed.get() and self.processed_image is not None:
+    def _get_work_image(self, use_preprocessed=None):
+        """返回用于原子检测的图像（可能为预处理图像）。
+
+        use_preprocessed: 已在主线程快照的布尔值。后台 worker 线程必须传入
+        快照，不得经 None 分支现场读取 tk 变量（Tk 非线程安全，工单75：
+        实测主循环未派发时跨线程 .get() 抛 RuntimeError）；None 仅限
+        主线程回调（如校准流程）使用。
+        """
+        if use_preprocessed is None:
+            use_preprocessed = self.use_preprocessed.get()
+        if use_preprocessed and self.processed_image is not None:
             return self.processed_image
         return self.image
 
@@ -3654,13 +3666,17 @@ class AtomMarkerApp:
         self.status.config(text="正在后台检测原子点...")
         self.root.update_idletasks()
         self._ensure_worker_polling()
+        # 工单75: 在主线程把 tk.BooleanVar 快照成普通 bool 传入 worker,
+        # worker 内不得再读 tkinter 变量 (Tk 非线程安全)。
+        use_preprocessed = bool(self.use_preprocessed.get())
 
         def _run():
             try:
                 if generation != self._job_generation:
                     return
                 new_points, gaussian_fallback_stats = self._detect_peaks_worker(
-                    min_distance, sigma, window, threshold, bright)
+                    min_distance, sigma, window, threshold, bright,
+                    use_preprocessed)
                 self._worker_queue.put(
                     ('detect_done', generation,
                      (new_points, gaussian_fallback_stats)))
@@ -3711,8 +3727,11 @@ class AtomMarkerApp:
         self.status.config(text=f"自动检测完成，共 {len(self.points)} 个原子点 (亚像素定位)"
                                 f"{fallback_note.strip()}")
 
-    def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright):
-        img = self._get_work_image().copy()
+    def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright,
+                             use_preprocessed):
+        # 工单75: use_preprocessed 必填(无默认值), 强制调用方在主线程快照后传入,
+        # worker 内经 None 分支现场读 tk 变量会在编译期签名层面就不再可能。
+        img = self._get_work_image(use_preprocessed).copy()
         h_img, w_img = img.shape
 
         # 记住检测 ROI 边界，后续做后过滤（不要用 -inf 污染图像）

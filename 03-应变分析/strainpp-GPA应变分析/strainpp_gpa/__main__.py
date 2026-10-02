@@ -1,6 +1,6 @@
 """Run the Strain++ GPA command-line interface."""
 
-from strain_analysis import main
+from strainpp_gpa.cli import main
 
 import sys  # noqa: E402
 # Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError

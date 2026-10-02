@@ -115,6 +115,46 @@ def _build_minimal_dm4(width=10, height=16):
     return b''.join(parts)
 
 
+def _build_minimal_dm4_stack(width=10, height=16, depth=4):
+    """Build a minimal DM4 stream declaring a depth x height x width stack.
+
+    Same tag encoding as :func:`_build_minimal_dm4`, with one extra
+    Dimensions tag so the declared dataset is 3-dimensional.
+    """
+    parts = []
+    parts.append(struct.pack('>IQI', 4, 0, 1))
+    parts.append(b'\x01\x01')
+    parts.append(struct.pack('>Q', 1))
+    group_label = b'ImageData'
+    parts.append(b'\x14')
+    parts.append(struct.pack('>H', len(group_label)))
+    parts.append(group_label)
+    parts.append(struct.pack('>Q', 0))
+    parts.append(b'\x01\x01')
+    parts.append(struct.pack('>Q', 4))  # 3 Dimensions tags + Data
+    for value in (width, height, depth):
+        dim_label = b'Dimensions'
+        parts.append(b'\x15')
+        parts.append(struct.pack('>H', len(dim_label)))
+        parts.append(dim_label)
+        parts.append(struct.pack('>Q', 0))
+        parts.append(b'%%%%')
+        parts.append(struct.pack('>Q', 1))
+        parts.append(struct.pack('>Q', 3))  # int32
+        parts.append(struct.pack('<i', value))
+    data_label = b'Data'
+    parts.append(b'\x15')
+    parts.append(struct.pack('>H', len(data_label)))
+    parts.append(data_label)
+    parts.append(struct.pack('>Q', 0))
+    parts.append(b'%%%%')
+    parts.append(struct.pack('>Q', 3))
+    total = width * height * depth
+    parts.append(struct.pack('>QQQ', 20, 6, total))  # float32 array
+    parts.append(np.arange(total, dtype=np.float32).tobytes())
+    return b''.join(parts)
+
+
 @unittest.skipUnless(tifffile is not None, "tifffile is not installed")
 class TIFFTests(unittest.TestCase):
     def test_multipage_stack_reads_first_page(self):
@@ -174,6 +214,55 @@ class DMReaderTests(unittest.TestCase):
         np.testing.assert_array_equal(image, source[0])
         self.assertEqual(metadata['pixel_size'], (0.2, 3.0))
         self.assertTrue(metadata['calibration_verified'])
+
+    def test_dm4_3d_stack_fallback_returns_first_frame(self):
+        """Without ncempy, a declared 3D stack must yield the first frame.
+
+        Regression for audit ticket 71: the built-in parser returned the raw
+        flattened payload (shape (W*H*D,)) for a declared stack while the
+        ncempy path sliced off the first frame, so the same file changed
+        shape depending on whether ncempy was installed.
+        """
+        depth, height, width = 4, 16, 10
+        stack = np.arange(
+            depth * height * width, dtype=np.float32
+        ).reshape(depth, height, width)
+        payload = _build_minimal_dm4_stack(width, height, depth)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'stack.dm4')
+            with open(path, 'wb') as stream:
+                stream.write(payload)
+            with mock.patch.dict(sys.modules, {'ncempy': None, 'ncempy.io': None}):
+                image, metadata = read_dm_file(path)
+        self.assertEqual(image.shape, (height, width))
+        self.assertEqual(metadata['shape'], (height, width))
+        np.testing.assert_array_equal(image, stack[0])
+
+    def test_fallback_flat_payload_without_dimension_tags_raises(self):
+        """A payload with no usable dimension tags must raise, not return 1D.
+
+        The ncempy path rejects sub-2D datasets with DM3Error; the fallback
+        must agree instead of handing a flattened array to the pipeline.
+        """
+        total = 10 * 16 * 4
+        parts = [
+            struct.pack('>IQI', 4, 0, 1),
+            b'\x01\x01', struct.pack('>Q', 1),
+            b'\x14' + struct.pack('>H', 9) + b'ImageData' + struct.pack('>Q', 0),
+            b'\x01\x01', struct.pack('>Q', 1),
+            b'\x15' + struct.pack('>H', 4) + b'Data' + struct.pack('>Q', 0)
+            + b'%%%%' + struct.pack('>Q', 3)
+            + struct.pack('>QQQ', 20, 6, total),
+            np.arange(total, dtype=np.float32).tobytes(),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'flat.dm4')
+            with open(path, 'wb') as stream:
+                stream.write(b''.join(parts))
+            with mock.patch.dict(sys.modules, {'ncempy': None, 'ncempy.io': None}):
+                with self.assertRaises(DM3Error) as context:
+                    read_dm_file(path)
+        self.assertIn('not a 2D image', str(context.exception))
 
 
 class DMScaleHeuristicTests(unittest.TestCase):

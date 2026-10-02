@@ -36,9 +36,9 @@ build = ["pyinstaller>=6.0,<7"]
 test = ["build>=1.2", "twine>=5"]
 
 [project.scripts]
-strainpp-gpa = "strain_analysis:main"
-strainpp-gpa-gui = "strain_gui:main"
-strainpp-gpa-batch = "strain_batch:main"
+strainpp-gpa = "strainpp_gpa.cli:main"
+strainpp-gpa-gui = "strainpp_gpa.gui:main"
+strainpp-gpa-batch = "strainpp_gpa.batch_cli:main"
 
 [project.urls]
 Upstream = "https://github.com/JJPPeters/Strainpp"
@@ -49,9 +49,6 @@ version = {attr = "_version.__version__"}
 [tool.setuptools]
 py-modules = [
   "_version",
-  "strain_analysis",
-  "strain_batch",
-  "strain_gui",
 ]
 
 [tool.setuptools.packages.find]

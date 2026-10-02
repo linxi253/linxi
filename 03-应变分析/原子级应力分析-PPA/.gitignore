@@ -1,19 +1,8 @@
-__pycache__/
-*.py[cod]
-*.pyo
-.pytest_cache/
-*.egg-info/
-.venv/
-venv/
-
-# Reproducible local build artifacts; releases are distributed separately.
-build/
-dist/
+# 本目录特有规则；通用 Python/构建/显微数据忽略规则见仓库根 .gitignore。
 
 # Local analysis outputs and temporary project writes.
 *.tmp
 *.metadata.json
-results/
 PPA_Stats_*/
 
 # Local snapshots taken before refactors; git history supersedes them.
@@ -21,20 +10,10 @@ backups/
 
 # Editor/agent local settings (machine-specific).
 .claude/settings.local.json
-.idea/
-.vscode/
 
-# Deep-learning assets: weights, datasets and training runs are large and
-# reproducible from the training scripts, so they stay out of the repository.
-atom_detector/models/*.pt
-atom_detector/models/*.onnx
-atom_detector/runs/
+# Deep-learning assets: weights (*.pt/*.onnx) and runs are covered by the root
+# .gitignore; datasets are large and reproducible from the training scripts.
 datasets/
 raw_images/
 raw_labels/
 yolo_labels/
-
-# Microscopy source data is typically large and lives outside version control.
-*.dm3
-*.dm4
-*.emd

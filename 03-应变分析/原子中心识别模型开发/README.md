@@ -82,7 +82,7 @@ python scripts\smoke_test.py
 
 标注人员无需使用命令行或寻找项目 JSON：启动后选择负责人发送的整个任务文件夹即可。启动页会按系统显示缩放自动调整，主界面右侧参数区在小屏幕上可滚动。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
@@ -93,7 +93,7 @@ python scripts\smoke_test.py
 | 当前版本 | **0.3.0** |
 | 版本来源 | `pyproject.toml` |
 | 入口 | 训练/推理入口见 `docs/training-workflow.md`；Python 包位于 `src/atom_center` |
-| 依赖锁定 | —（无锁定文件，使用 `requirements.txt`） |
+| 依赖锁定 | `requirements/*.lock`（训练/推理两套；另有 CUDA 完整快照 `requirements/lock-win-cu128.txt`） |
 | 许可证 | MIT |
 
 **从源码运行**——必须使用本工具自己的虚拟环境，不要用 PATH 上的 `python`：
@@ -102,7 +102,8 @@ python scripts\smoke_test.py
 ```powershell
 cd <本工具目录>
 python -m venv .venv
-.venv\Scripts\python -X utf8 -m pip install -r requirements.txt
+# 纯 CPU 推理装推理锁；训练/导出的 training 锁由 scripts\setup_environment.ps1 安装（两者版本契约不同，勿混用）
+.venv\Scripts\python -X utf8 -m pip install -r requirements\inference-win-py310.lock
 见本目录 README 的入口说明
 ```
 

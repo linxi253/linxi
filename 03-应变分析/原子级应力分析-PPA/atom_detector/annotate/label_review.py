@@ -480,7 +480,8 @@ class LabelReviewApp:
                 yolo_lines.append(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
 
             export_file = self.export_dir / f"{label_file.stem}.txt"
-            with open(export_file, 'w') as f:
+            # encoding 显式化：内容目前是纯 ASCII，但按 locale 落盘不可移植。
+            with open(export_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(yolo_lines))
             count += 1
 

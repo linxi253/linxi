@@ -56,9 +56,16 @@ PyTorch 的 `.pt` 权重在反序列化时可能执行任意代码，因此本�
 # 1. 计算哈希并查看输出
 python -m atom_detector.model_security .\models\best.pt
 
-# 2. 确认模型来源与哈希后，将其加入白名单
-python -m atom_detector.model_security .\models\best.pt --allow
+# 2. 核对模型来源与哈希后，显式登记（必须声明来源；交互终端会要求二次确认）
+python -m atom_detector.model_security .\models\best.pt --allow --source "<下载URL/版本号/训练任务号/审批人>"
 ```
+
+**白名单的信任性质（工单78）**：这是「首次使用即信任（TOFU）」性质的
+**防误加载**措施，**不是来源认证**——它只保证加载的模型与登记时的哈希一致，
+不保证模型本身可信；且本机操作者本就能替换模型文件，故该边界不防本机攻击者。
+加白时声明的来源与登记时间会写入 `allowlist.json` 的 `records` 留痕，便于事后
+审计；校验失败的报错（CLI 与 GUI 弹窗）不再提供可直接复制执行的加白命令，
+登记一律走上述显式流程。
 
 不要加载来源不明、哈希未核对的 `.pt` 文件；即使加入白名单，也应当只
 信任自己训练或从可信渠道分发的权重。`integration/ppa_plugin.py` 的
@@ -68,8 +75,8 @@ python -m atom_detector.model_security .\models\best.pt --allow
 
 - `config.yaml`：数据路径、标注和推理默认参数；其中 `training.*` 段已无消费者
   （训练入口已迁移到 atom_center），仅作历史参考保留。
-- `models/allowlist.json`：允许加载的模型 SHA-256 列表（默认空）。
-- `model_security.py`：模型哈希计算、白名单校验与命令行工具。
+- `models/allowlist.json`：允许加载的模型 SHA-256 列表（默认空）与加白留痕 `records`。
+- `model_security.py`：模型哈希计算、白名单校验、加白登记（声明来源并留痕）与命令行工具。
 - `annotate/semi_auto_label.py`：基于传统峰值检测生成预标注。
 - `annotate/label_review.py`：图形化审核、增删标注并导出 YOLO 格式。
 - `dataset/prepare_dataset.py`：训练/验证/测试划分和 `data.yaml` 生成。

@@ -111,7 +111,7 @@ E_GL = 1/2 (FᵀF - I)
 - Galindo et al., *Ultramicroscopy* 107 (2007) 1186–1193, Peak Pairs Analysis.
 - Green–Lagrange strain: `E = 1/2 (FᵀF − I)`.
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

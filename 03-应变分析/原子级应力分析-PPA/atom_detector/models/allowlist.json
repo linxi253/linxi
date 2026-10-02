@@ -1,4 +1,5 @@
 {
-  "description": "PPA 原子检测模型白名单。只有 SHA-256 在此列表中的模型才允许被加载。",
-  "sha256": []
+  "description": "PPA 原子检测模型白名单。只有 SHA-256 在此列表中的模型才允许被加载。白名单是「首次使用即信任(TOFU)」性质的防误加载措施，不是来源认证；加白须经 python -m atom_detector.model_security <model.pt> --allow --source <来源说明> 登记并在 records 留痕。",
+  "sha256": [],
+  "records": []
 }

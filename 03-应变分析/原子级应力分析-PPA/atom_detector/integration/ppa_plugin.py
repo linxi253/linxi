@@ -237,11 +237,14 @@ class DLDetectDialog:
             self.dlg.destroy()
 
         except ModelVerificationError as e:
+            # 工单78: 不把可直接复制执行的加白命令作为标准修复步骤呈现;
+            # 登记须按文档流程显式进行(声明来源并留痕)。
             messagebox.showerror(
                 "模型未通过校验",
                 f"{e}\n\n"
-                f"只有在确认模型来源与哈希后，才能将其加入白名单:\n"
-                f"  python -m atom_detector.model_security <model.pt> --allow")
+                f"白名单是「首次使用即信任(TOFU)」性质的防误加载措施，不是来源认证。\n"
+                f"请先核对模型来源与哈希；确认可信后，按 atom_detector/README.md\n"
+                f"「模型安全」一节的登记流程显式加白（需声明来源并留痕）。")
             self.detect_btn.config(state='normal')
             self.status_var.set("模型校验失败")
 

@@ -11,6 +11,7 @@
   - ppa_stats 可选列按表头名解析 (列序无关)
   - utf-8-sig (带 BOM) CSV 双向兼容
   - semi_auto_label 背景自适应阈值对暗原子的公平性
+  - 自动检测 worker 强制主线程快照 use_preprocessed (工单75, Tk 非线程安全)
 """
 from __future__ import annotations
 
@@ -98,6 +99,54 @@ class DetectAppendAfterEditTests(unittest.TestCase):
                                    "askyesnocancel", return_value=None):
                 app._finish_auto_detect([(10.0, 10.0)])
             self.assertEqual(app.points, [(5.0, 5.0)])
+        finally:
+            root.destroy()
+
+
+class DetectWorkerTkSnapshotTests(unittest.TestCase):
+    """工单75: worker 线程内不得读 tk 变量, use_preprocessed 必须为主线程快照。
+
+    本组用例锁定修复后的完整形态：_detect_peaks 在主线程完成快照、
+    worker 以普通数值形参接收（此前两者都直接读 tk 变量）。
+    """
+
+    def _make_app(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        root.withdraw()
+        import ppa
+        app = ppa.AtomMarkerApp(root)
+        app.image = np.zeros((50, 50), dtype=np.float64)
+        app.image_path = "synthetic.tif"
+        return root, app
+
+    def test_use_preprocessed_is_required_positional(self):
+        root, app = self._make_app()
+        try:
+            # 快照参数必填: 缺参在调用层即 TypeError, 不再可能经 None 分支
+            # 在 worker 线程现场读 tk 变量 (Tk 非线程安全)
+            with self.assertRaises(TypeError):
+                app._detect_peaks_worker(4, 0.0, 5, None, True)
+        finally:
+            root.destroy()
+
+    def test_worker_uses_snapshot_not_tk_var(self):
+        root, app = self._make_app()
+        try:
+            # 快照 False → 用原图 (全零图无峰)
+            app.processed_image = None
+            pts, stats = app._detect_peaks_worker(4, 0.0, 5, None, True, False)
+            self.assertEqual(pts, [])
+            self.assertIsNone(stats)
+            # 快照 True → 用预处理图 (单点亮斑), 与 use_preprocessed tk 变量无关
+            proc = np.zeros((50, 50), dtype=np.float64)
+            proc[25, 25] = 1.0
+            app.processed_image = proc
+            pts2, _ = app._detect_peaks_worker(4, 0.0, 5, None, True, True)
+            self.assertEqual(pts2, [(25.0, 25.0)])
         finally:
             root.destroy()
 

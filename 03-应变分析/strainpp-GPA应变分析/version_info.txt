@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 4, 0, 0),
-    prodvers=(1, 4, 0, 0),
+    filevers=(1, 4, 1, 0),
+    prodvers=(1, 4, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Strain++ GPA contributors'),
           StringStruct(u'FileDescription', u'Strain++ GPA HRTEM strain analysis'),
-          StringStruct(u'FileVersion', u'1.4.0'),
+          StringStruct(u'FileVersion', u'1.4.1'),
           StringStruct(u'InternalName', u'Strain++GPA'),
           StringStruct(u'LegalCopyright', u'GPL-3.0-or-later; based on JJPPeters/Strainpp'),
           StringStruct(u'OriginalFilename', u'Strain++GPA.exe'),
           StringStruct(u'ProductName', u'Strain++ GPA'),
-          StringStruct(u'ProductVersion', u'1.4.0')
+          StringStruct(u'ProductVersion', u'1.4.1')
         ]
       )
     ]),

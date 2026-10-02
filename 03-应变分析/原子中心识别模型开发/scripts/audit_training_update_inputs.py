@@ -85,9 +85,16 @@ def safe_extract(archive, target):
         for member in handle.infolist():
             if member.is_dir():
                 continue
+            # Audit 82: an empty name or "." collapses back onto the target itself under
+            # resolve(); reject it up front with a controlled error instead of a raw
+            # PermissionError/IsADirectoryError from opening the directory for writing.
+            if not member.filename or member.filename in ('.', '..') or Path(member.filename).is_absolute():
+                raise ValueError(f'zip member has an invalid name: {member.filename!r}')
             destination = (target / member.filename).resolve()
             if not destination.is_relative_to(target):
                 raise ValueError(f'zip member escapes the target directory: {member.filename}')
+            if destination.is_dir():
+                raise ValueError(f'zip member collapses onto an existing directory: {member.filename}')
             destination.parent.mkdir(parents=True, exist_ok=True)
             with handle.open(member) as source, destination.open('wb') as sink:
                 sink.write(source.read())

@@ -207,7 +207,6 @@ def main():
             '05 keeps 16 false positives and 18 misses inside the original ROI (worst cell r1c0 at 97.61% P/R); 04 keeps the 2 right-border misses that the corrected grid now shows explicitly.',
             '03 and the other unlabelled images remain outside the quantified range until human coordinates exist.',
             'The application-side AtomDetector still points at a legacy .pt path with conf 0.5; wiring this ONNX bundle into the application is a separate change.'],
-        'waiting_for': 'final Codex verification; execution stopped here',
     }
     write_json(RUN / 'dsh_result.json', result)
 
