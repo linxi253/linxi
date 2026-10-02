@@ -12,6 +12,7 @@
 修复了原版中缩放功能未绑定、resize 无防抖等问题。
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
@@ -29,6 +30,8 @@ from constants import (
     RESIZE_DEBOUNCE_MS,
 )
 from core.segmentation import to_uint8
+
+logger = logging.getLogger(__name__)
 
 
 class CanvasViewer(ttk.Frame):
@@ -52,6 +55,10 @@ class CanvasViewer(ttk.Frame):
         self._pan_start_x = 0
         self._pan_start_y = 0
         self._resize_timer = None  # resize 防抖
+
+        # 渲染失败回调（宿主可接入日志面板/状态栏）：Callable[[str], None] | None。
+        # 组件自身没有状态栏，留给宿主接线；组件内同时做画布可见提示 + 日志。
+        self.on_render_error = None
 
         self._build_ui()
         self._bind_events()
@@ -232,8 +239,27 @@ class CanvasViewer(ttk.Frame):
                 tags="zoom_indicator"
             )
 
-        except Exception:
-            pass  # 渲染失败时静默处理
+        except Exception as exc:
+            # 渲染失败不再静默（此前空白画布零提示）：写日志 + 画布上给出可见
+            # 提示，画布保持可用。异常类型无法收窄：to_uint8/cv2/PIL/ImageTk/
+            # tkinter 任意一环都可能因数据或窗口状态失败。
+            logger.warning("画布渲染失败: %s", exc, exc_info=True)
+            try:
+                self.canvas.delete("all")
+                self.canvas.create_text(
+                    10, 10, text=f"渲染失败: {exc}", anchor=tk.NW,
+                    fill='#ff8888', font=('Arial', 10, 'bold'),
+                    tags="render_error"
+                )
+            except Exception as canvas_exc:
+                # 画布本身不可用（如窗口关闭中）时无处提示，只能留日志
+                logger.debug("画布渲染失败提示也未能绘制: %s", canvas_exc)
+            if self.on_render_error is not None:
+                try:
+                    self.on_render_error(f"画布渲染失败: {exc}")
+                except Exception as cb_exc:
+                    # 宿主回调失败不得反噬渲染路径
+                    logger.debug("on_render_error 回调失败: %s", cb_exc)
 
     def reset_view(self):
         """重置视图（恢复自适应缩放；保留数据集级 uint16 位移）。

@@ -10,8 +10,12 @@
 
 ## 直接运行
 
-```text
-dist/TIFF面积测量工具v2.exe
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/TIFF面积测量工具v2.exe` 未随仓库分发。
+需要 exe 请用项目内环境自行打包：
+
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller 统计面积v2.spec
 ```
 
 ## 从源码运行
@@ -104,7 +108,7 @@ python -m pytest tests -q
 - `tests/test_area_core.py`：纯函数单元测试。
 - `requirements.txt`：运行依赖。
 - `统计面积v2.spec`：PyInstaller 配置。
-- `dist/TIFF面积测量工具v2.exe`：已打包程序。
+- `dist/TIFF面积测量工具v2.exe`：已打包程序（构建产物，未随仓库分发）。
 - `面积统计.txt`：较早的代码/说明文本副本，仅作历史备份。
 
 ## 注意事项

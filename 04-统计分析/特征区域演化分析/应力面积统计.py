@@ -612,7 +612,10 @@ def process_stem_stack(tif_path, time_interval=0.2, shared_threshold=False,
                 if not is_3d_color and first_page_shape[0] > 1:
                     single_page_3d_stack = True
                     try:
-                        memmap_stack = tiff.memmap(tif_path)
+                        # 显式只读映射：tifffile.memmap 默认 'r+'（可写），会对
+                        # 原始数据打开写句柄；下游坏像素清洗在 astype(copy=True)
+                        # 后才写入，不会回写映射。
+                        memmap_stack = tiff.memmap(tif_path, mode="r")
                     except Exception as e:
                         print(f"   ⚠ 无法以 memmap 方式读取单页 3D 堆叠，回退为整页读取: {e}")
                         single_page_3d_stack = False

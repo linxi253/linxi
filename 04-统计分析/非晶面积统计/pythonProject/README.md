@@ -4,12 +4,15 @@
 
 ## 直接运行
 
-```text
-dist/电镜晶体非晶区域统计分析工具v5.2.exe
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/电镜晶体非晶区域统计分析工具v5.2.exe`
+未随仓库分发。需要 exe 请用 `非晶面积统计工具.spec` 自行打包（v5.3 源码修复后尚未重新打包）：
+
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller 非晶面积统计工具.spec
 ```
 
-（当前 dist 内为 v5.2 旧版 exe；v5.3 源码修复后需用 `非晶面积统计工具.spec`
-重新打包。v5.1 及更早版本已归档到 `<仓库根>\08-历史版本\旧版exe\`。）
+（v5.1 及更早版本的旧 exe 归档在开发机的 `<仓库根>\08-历史版本\旧版exe\`，该归档未随本仓库分发。）
 
 ## 从源码运行
 

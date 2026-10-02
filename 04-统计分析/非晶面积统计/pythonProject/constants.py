@@ -126,7 +126,9 @@ SHAPE_UNIFORMITY_TIERS = (
 )
 SHAPE_UNIFORMITY_WORST = "区域形状显著分散"
 
-# "验证计算"面板的整体形状因子判读分档
+# "验证计算"面板的形状判读分档（作用于逐区域口径自洽的
+# 平均形状因子 shape_factor_mean，而非整体面积/周长聚合量——
+# 后者对 N≥2 个区域的图像恒缩水约 1/N，不具几何意义）
 VERIFY_SF_NEAR_CIRCLE = 0.9   # > 0.9 判为接近圆形
 VERIFY_SF_REGULAR = 0.7       # > 0.7 判为较规则
 

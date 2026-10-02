@@ -4,11 +4,15 @@
 
 ## 直接运行
 
-```text
-dist/HAADF-STEM特征区域演化分析工具.exe
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/HAADF-STEM特征区域演化分析工具.exe`
+未随仓库分发。需要 exe 请用项目内环境自行打包：
+
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller 特征区域演化分析.spec
 ```
 
-程序会弹出 TIFF 文件选择框，随后询问帧时间间隔与样品描述，并在输入文件旁创建带时间戳的 `NatureStyle_Analysis_*` 输出目录。
+打包后的程序会弹出 TIFF 文件选择框，随后询问帧时间间隔与样品描述，并在输入文件旁创建带时间戳的 `NatureStyle_Analysis_*` 输出目录。
 
 ## 从源码运行
 
@@ -61,7 +65,7 @@ python -m pytest tests/ -q
 - `应力面积统计.py`：完整命令行/文件选择入口和分析逻辑。
 - `requirements.txt`：运行依赖。
 - `特征区域演化分析.spec`：PyInstaller 配置。
-- `dist/HAADF-STEM特征区域演化分析工具.exe`：已打包程序。
+- `dist/HAADF-STEM特征区域演化分析工具.exe`：已打包程序（构建产物，未随仓库分发）。
 - `应力图说明.txt`：图表和分析意图的补充说明。
 
 ## 限制

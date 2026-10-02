@@ -94,6 +94,9 @@ class EMImageAnalyzerApp:
 
         # ===== 初始化日志 =====
         self.logger = AppLogger(self.root, self.log_text, self.status_var)
+        # 画布渲染失败接入日志面板 + 状态栏（AppLogger.warn 两者都更新；
+        # CanvasViewer 自身无状态栏，渲染失败不能只留白板——工单26 修法5）
+        self.canvas_viewer.on_render_error = lambda msg: self.logger.warn(msg)
 
         # ===== 窗口事件 =====
         self._resize_timer = None
@@ -645,24 +648,29 @@ class EMImageAnalyzerApp:
             # 形状因子验证
             text = "═══ 计算验证 ═══\n\n"
             text += f"晶体面积: {result.crystalline_area_nm2:,.2f} nm²\n"
-            text += f"晶体周长: {result.crystalline_perimeter_nm:,.2f} nm\n"
+            text += f"晶体周长: {result.crystalline_perimeter_nm:,.2f} nm\n\n"
 
-            if result.crystalline_perimeter_nm > 0:
-                sf = (4 * np.pi * result.crystalline_area_nm2) / (result.crystalline_perimeter_nm ** 2)
-                text += f"整体形状因子 (4πA/P²): {sf:.4f}\n\n"
-                text += "理论参考:\n"
-                text += f"  完美圆形: {SHAPE_FACTOR_CIRCLE:.4f}\n"
-                text += f"  正方形:   {SHAPE_FACTOR_SQUARE:.4f}\n\n"
+            # 形状判语采用逐区域口径自洽的 shape_factor_mean（逐区域
+            # 4πA/P² 的均值）。不把整体面积/整体周长代入单圆公式：
+            # N≥2 个区域时该聚合量恒缩水约 1/N，且分子为像素计数面积、
+            # 分母为轮廓多边形周长，两口径混用（见 measure_regions
+            # docstring），代入 4πA/P² 无几何意义。
+            sf = result.shape_factor_mean
+            text += f"平均形状因子 (逐区域 4πA/P² 均值): {sf:.4f}\n"
+            text += "理论参考:\n"
+            text += f"  完美圆形: {SHAPE_FACTOR_CIRCLE:.4f}\n"
+            text += f"  正方形:   {SHAPE_FACTOR_SQUARE:.4f}\n\n"
 
-                if sf > VERIFY_SF_NEAR_CIRCLE:
-                    text += "→ 形状接近圆形\n"
-                elif sf > VERIFY_SF_REGULAR:
-                    text += "→ 形状较规则\n"
-                else:
-                    text += "→ 形状不规则\n"
+            if result.num_regions < 1:
+                text += "→ 无有效区域，无法评判形状\n"
+            elif sf > VERIFY_SF_NEAR_CIRCLE:
+                text += "→ 形状接近圆形\n"
+            elif sf > VERIFY_SF_REGULAR:
+                text += "→ 形状较规则\n"
+            else:
+                text += "→ 形状不规则\n"
 
             text += f"\n区域数量: {result.num_regions}\n"
-            text += f"平均形状因子: {result.shape_factor_mean:.4f}\n"
 
             self._show_text_in_preview(text)
             self.logger.log(f"验证完成: 形状因子 = {result.shape_factor_mean:.4f}")
