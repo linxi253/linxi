@@ -35,7 +35,7 @@ preload=("gpa", "phase", "utils", "dm_reader", "strain_analysis")
 | `embed`（同一进程内 `import` + `preload`） | 其余全部工具，**含 GPL-3.0 的 `03-应变分析/strainpp-GPA应变分析`** |
 
 > 仓库根 `NOTICE.md` 早期版本把调用方式笼统描述为「以子进程/按需加载方式调用」，
-> 实际 18 个工具中只有 2 个走子进程。本文件按代码实际行为更正。
+> 实际 16 个工具中只有 2 个走子进程。本文件按代码实际行为更正。
 
 ### 含义
 
