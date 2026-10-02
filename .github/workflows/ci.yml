@@ -62,6 +62,17 @@ jobs:
           # 测试导入 yaml，但依赖清单未声明 pyyaml（见下方 "Known gaps"）
           - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', deps: 'pyyaml' }
           - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法' }
+          # 审计条目 13：仓库里唯一配了完整 pytest 工程却被矩阵遗漏的子项目。
+          # pyproject 锁 requires-python >=3.10,<3.11 → 必须用 3.10；src/ 布局
+          # 且无 conftest.py，测试前须 editable 安装才能 import atom_center；
+          # 无根级 requirements*.txt，依赖随 editable 安装带入；tests 大多不需
+          # torch（backends.py 延迟导入，test_onnx_parity 用 importorskip 降级）。
+          # deps 补 opencv（tests 实测需要但 core dependencies 未声明，见 Known gaps）；
+          # test 排除 packaged_smoke 一例（断言捆绑字体注册成功，而仓库刻意不
+          # 收录该 .otf，见 Known gaps）。
+          - { name: '03 原子中心识别模型开发', dir: '03-应变分析/原子中心识别模型开发', py: '3.10', editable: true,
+              deps: 'opencv-python==4.11.0.86',
+              test: 'python -m pytest -q --deselect tests/test_annotations.py::test_packaged_smoke_path_exercises_gui_and_export' }
           - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
           - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
           - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
@@ -116,6 +127,13 @@ jobs:
           if ($lock) { python -m pip install -r $lock }
           python -m pip install pytest ${{ matrix.deps }}
 
+      # src/ 布局的项目（原子中心识别模型开发）无 conftest.py 兜底 import，
+      # pytest 收集前必须先可编辑安装出 atom_center 包（审计条目 13）
+      - name: Install project (editable)
+        if: matrix.editable
+        working-directory: ${{ matrix.dir }}
+        run: python -m pip install -e .
+
       - name: Run tests
         working-directory: ${{ matrix.dir }}
         env:
@@ -126,7 +144,36 @@ jobs:
           TMP: ${{ runner.temp }}
         run: ${{ matrix.test || 'python -m pytest -q' }}
 
+  # ---------------------------------------------------------------------------
+  # 引擎同步守门（审计条目 15 轻量路线）：09-HRTEM模拟/tem_sim 与
+  # 010-STEM模拟/stem_sim 是同一套模拟引擎的两份拷贝，已因单侧打补丁分叉过
+  # （相位标度 /pixel_area 曾修在 010、漏在 09）。对两侧公共模块做 AST 级
+  # 函数体比对、对 data/ 数据表做 sha256 比对，未在 .tools/check_engine_sync.py
+  # 豁免表中声明理由的不一致即失败。跑在 Linux 上，纯标准库，无需项目依赖。
+  # ---------------------------------------------------------------------------
+  engine-sync:
+    name: engine sync (tem_sim vs stem_sim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check 09 tem_sim <-> 010 stem_sim
+        run: python .tools/check_engine_sync.py
+
 # Known gaps found by this workflow (not fixed here — see repository issues):
 #   1. 03-应变分析/原子级应力分析-PPA 的测试导入 yaml，但 requirements*.txt / lock 均未声明 pyyaml。
 #   2. 010-STEM模拟/tests/test_e2e_au.py 用 test_* 命名但不具 pytest 结构（函数间靠返回值串联），
 #      故 CI 改跑 README 记录的 tests/verify_physics.py。
+#   3. 03-应变分析/原子中心识别模型开发：多个测试经 preprocessing 懒加载 import cv2，
+#      但 pyproject core dependencies 未声明 opencv（只在 [infer]/[train] extras 里），
+#      CI 用 deps=opencv-python==4.11.0.86 补齐（与其 extras 的 pin 一致）。
+#   4. 03-应变分析/原子中心识别模型开发 tests/test_annotations.py::
+#      test_packaged_smoke_path_exercises_gui_and_export 断言捆绑字体
+#      (assets/NotoSansCJKsc-AtomAnnotator.otf) 注册成功，但仓库为控制体积未收录
+#      该 .otf（仅存 FONT_SOURCE.txt 与 OFL.txt，见其下载指引），configure_bundled_font()
+#      在任何一次干净检出上都返回 False——该断言在仓库现状下恒失败，CI 将其 deselect，
+#      待字体回补或测试改为按资产存在性跳过后恢复。
