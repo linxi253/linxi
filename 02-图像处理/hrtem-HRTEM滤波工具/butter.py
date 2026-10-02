@@ -1,7 +1,8 @@
 r"""Compatibility launcher and legacy API adapter for the v5 package.
 
-The legacy implementation is archived in
-``<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29``.
+The legacy v4 implementation was archived on the original developer machine as
+``08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29``; that archive is not
+distributed with this repository.
 
 Two entry styles are supported:
 
@@ -21,6 +22,15 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 

@@ -10,9 +10,8 @@ CTF 离域（delocalization）后扩散到晶体外的分量。本工具让你**
 
 ## 直接运行
 
-```text
-dist/DelocCleaner.exe
-```
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/DelocCleaner.exe` 未随仓库分发。
+需要 exe 请用项目内环境自行打包（见下文 `build.bat` / spec 说明）。
 
 ## 从源码运行
 

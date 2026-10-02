@@ -96,7 +96,9 @@ ruff check .
 建议启用本地提交防线，每次 commit 自动执行静态检查与回归测试：
 
 ```powershell
-git config core.hooksPath .githooks
+# 在仓库根执行：core.hooksPath 的相对路径按仓库顶层解析，
+# 必须写成带子项目前缀的路径，只写 .githooks 会指向不存在的 <仓库根>/.githooks
+git config core.hooksPath "02-图像处理/stem-optimize-STEM图像优化/.githooks"
 ```
 
 60 项测试覆盖同路径保护、预取消/处理中取消、发布回滚、处理中输入变化、

@@ -5,6 +5,16 @@ import numpy as np
 
 from preview_canvas import RESIZE_DEBOUNCE_MS, PreviewCanvas
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class PreviewCanvasTests(unittest.TestCase):
     def test_full_range_uint16_uses_integer_16_to_8_mapping(self):

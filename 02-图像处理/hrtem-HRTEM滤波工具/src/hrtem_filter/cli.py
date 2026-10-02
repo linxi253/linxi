@@ -13,6 +13,15 @@ from .params import FilterParams, OutputEncoding, SaveOptions
 from .pipeline import ProcessingCancelled, StackProcessor
 from .tiff_io import inspect_tiff
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="HRTEM/STEM Kilaas filter v5")

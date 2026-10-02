@@ -4,12 +4,14 @@
 
 ## 直接运行
 
-```text
-dist/TIF_FilterTool.exe
-dist/TIF_FilterTool-v1.2.0.exe
-```
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/TIF_FilterTool.exe` 与
+`dist/TIF_FilterTool-v1.2.0.exe`（同一版本，无版本文件名保留给已有快捷方式使用）均未随仓库分发。
+需要 exe 请用项目内环境自行打包：
 
-两个文件是同一版本；无版本文件名保留给已有快捷方式使用。
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller TIF_FilterTool.spec
+```
 
 ## 批量处理 TIFF 堆栈
 
@@ -108,7 +110,7 @@ python .\main.py
 - `test_images/`：自动生成的测试输入（不入库）。
 - `requirements-dev.txt`：构建打包专用依赖。
 - `build.bat`、`build_release.py`、`TIF_FilterTool.spec`：Windows 测试、打包与校验和生成。
-- `dist/TIF_FilterTool.exe`：已打包程序。
+- `dist/TIF_FilterTool.exe`：已打包程序（构建产物，未随仓库分发）。
 
 ## 验证与打包
 

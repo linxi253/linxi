@@ -1,7 +1,12 @@
 #!/bin/sh
 # 本地提交防线：静态检查 + 全量回归测试。
-# 启用：git config core.hooksPath .githooks
+# 启用（在仓库根执行一次）。注意：core.hooksPath 的相对路径按仓库顶层解析，
+# 不能写 .githooks（那会指向不存在的 <仓库根>/.githooks），必须带子项目前缀：
+#   git config core.hooksPath "02-图像处理/stem-optimize-STEM图像优化/.githooks"
 set -e
+
+# git 执行钩子时 cwd 是仓库顶层，ruff/unittest 需在本子项目目录内运行。
+cd "$(dirname "$0")/.."
 
 echo "[pre-commit] python -m ruff check ."
 python -m ruff check .

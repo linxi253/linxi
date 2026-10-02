@@ -27,6 +27,15 @@ import deloc_core
 import roi_model
 import tif_io
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def reference_mask(img: np.ndarray) -> np.ndarray:
     """上一版脚本用的自动掩膜（低频阈值），仅用于构造对照多边形。"""
@@ -45,7 +54,8 @@ def mask_to_polygon(mask: np.ndarray, max_points: int = 200):
     except ImportError as exc:  # pragma: no cover - 环境相关
         raise SystemExit(
             "本脚本需要 scikit-image 做轮廓提取（仅校验用，程序本体不依赖）。\n"
-            "安装：python -m pip install scikit-image"
+            "安装：激活本项目 .venv 后执行 pip install scikit-image\n"
+            "（或直接运行仓库根的 .tools/provision-envs.py 一键重建环境）。"
         ) from exc
 
     contours = measure.find_contours((mask > 0.5).astype(float), 0.5)

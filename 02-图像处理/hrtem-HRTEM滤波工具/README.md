@@ -135,9 +135,9 @@ pyinstaller .\HRTEM_Filter_CLI.spec
 
 ## 历史版本与第三方文件
 
-修复前的完整 42 文件快照位于：
-
-`<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`
+修复前的完整 42 文件快照归档在开发机的
+`<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`，
+该归档未随本仓库分发（仓库内不存在此目录）。
 
 DigitalMicrograph、ImageJ、PASAD 等历史材料位于本项目 `legacy/`。它们不属于
 v5 Python 运行时，也不会被打包。详细说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -25,6 +25,9 @@ pyparsing==3.3.3
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 pywin32-ctypes==0.2.3
+# 补录：requirements-dev.txt 已声明 scikit-image>=0.21（validate_real_data.py
+# 轮廓提取需要），此前漏入本锁。0.25.2 为仓库 venv 实装版本，存在 cp310 wheel。
+scikit-image==0.25.2
 scipy==1.15.3
 six==1.17.0
 tifffile==2025.5.10

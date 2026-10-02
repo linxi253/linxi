@@ -13,6 +13,16 @@ from image_filters import process_image
 from tif_io import TifDocument, list_tif_files, safe_output_path
 from version import __version__
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def sha256(path):
     digest = hashlib.sha256()
