@@ -13,7 +13,9 @@ Their respective licenses remain in effect.
   https://github.com/python-pillow/Pillow/blob/main/LICENSE
 - tifffile — BSD-3-Clause
   https://github.com/cgohlke/tifffile/blob/master/LICENSE
-- Noto Sans CJK SC — SIL Open Font License 1.1
+- Noto Sans CJK SC (optional font asset, not included in the default
+  distribution; when a build bundles NotoSansCJKsc-AtomAnnotator.otf it is
+  unmodified upstream Noto Sans CJK) — SIL Open Font License 1.1
   https://github.com/notofonts/noto-cjk
 - PyInstaller bootloader — GPL-2.0-or-later with the PyInstaller bootloader exception
   https://pyinstaller.org/en/stable/license.html

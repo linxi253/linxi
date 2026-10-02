@@ -30,6 +30,16 @@ from atomic_core import (
 )
 from tests.tk_session import get_tk_session
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def _gaussian_stack() -> np.ndarray:
     yy, xx = np.mgrid[:64, :64]
@@ -66,10 +76,8 @@ class RegionWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "out.csv")
             # 导出完成弹窗会在轮询中触发；补丁必须覆盖 busy 等待循环全程。
-            with (
-                patch("atomic_app.filedialog.asksaveasfilename", return_value=path),
-                patch("atomic_app.messagebox.showinfo"),
-            ):
+            with patch("atomic_app.filedialog.asksaveasfilename", return_value=path), \
+                    patch("atomic_app.messagebox.showinfo"):
                 self.app.export_csv()
                 deadline = time.monotonic() + 8.0
                 while self.app._busy and time.monotonic() < deadline:
@@ -237,11 +245,9 @@ class RegionWorkflowTests(unittest.TestCase):
         )
         self.app.current_mode = "calibrate"
         self.app._calibration_points = [(16.0, 16.0), (48.0, 16.0)]
-        with (
-            patch("atomic_app.calibrate_from_points", return_value=calibration),
-            patch.object(self.app, "show_detection_params", return_value="detect") as show_dialog,
-            patch.object(self.app, "start_detection") as start_detection,
-        ):
+        with patch("atomic_app.calibrate_from_points", return_value=calibration), \
+                patch.object(self.app, "show_detection_params", return_value="detect") as show_dialog, \
+                patch.object(self.app, "start_detection") as start_detection:
             self.app.finish_calibration()
 
         show_dialog.assert_called_once_with(
@@ -301,10 +307,8 @@ class IntensitySourceOfTruthTests(unittest.TestCase):
 
     def test_add_point_aborts_when_intensity_fields_invalid(self) -> None:
         self.app.aperture_var.set("abc")
-        with (
-            patch("atomic_app.refine_point_on_work") as refine,
-            patch("atomic_app.messagebox.showerror") as showerror,
-        ):
+        with patch("atomic_app.refine_point_on_work") as refine, \
+                patch("atomic_app.messagebox.showerror") as showerror:
             self.app._add_point(16.0, 16.0)
         refine.assert_not_called()  # 参数解析必须发生在亚像素精炼之前
         showerror.assert_called_once()
@@ -480,10 +484,8 @@ class SessionRoundtripTests(unittest.TestCase):
         self.assertEqual(data["source_tiff"], str(self.tiff_path))
         self.assertFalse(Path(str(session_path) + ".part").exists())
 
-        with (
-            patch("atomic_app.messagebox.askyesno", return_value=True),
-            patch("atomic_app.filedialog.askopenfilename", return_value=session_path),
-        ):
+        with patch("atomic_app.messagebox.askyesno", return_value=True), \
+                patch("atomic_app.filedialog.askopenfilename", return_value=session_path):
             app.open_session()
 
         self.assertEqual(app.detection_params, DetectionParams(0.7, 9.0, 5, 0.55, True, "com"))
@@ -508,11 +510,9 @@ class SessionRoundtripTests(unittest.TestCase):
         payload = json.loads(session_path.read_text(encoding="utf-8"))
         payload["stack_shape"] = [7, 7, 7]
         session_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        with (
-            patch("atomic_app.messagebox.askyesno", return_value=True),
-            patch("atomic_app.filedialog.askopenfilename", return_value=str(session_path)),
-            patch("atomic_app.messagebox.showerror") as showerror,
-        ):
+        with patch("atomic_app.messagebox.askyesno", return_value=True), \
+                patch("atomic_app.filedialog.askopenfilename", return_value=str(session_path)), \
+                patch("atomic_app.messagebox.showerror") as showerror:
             app.open_session()
         showerror.assert_called_once()
         # 原状态不被破坏

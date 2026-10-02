@@ -1,4 +1,8 @@
 # atom_detector 依赖
+# 注意：infer/ 评测与推理链路还 import 兄弟项目「原子中心识别模型开发」的
+# atom_center 包（03-应变分析/原子中心识别模型开发，Python >=3.10,<3.11）；
+# 该包不在本清单内，需在其项目目录按其 README 以 `python -m pip install -e .`
+# 安装，缺失时 infer/benchmark.py 会 SystemExit 提示。
 # 核心
 ultralytics>=8.0
 torch>=2.0

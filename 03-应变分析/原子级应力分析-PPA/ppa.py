@@ -16,6 +16,16 @@
 
 依赖: numpy, scipy, matplotlib, tifffile, tkinter
 """
+import sys
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -74,11 +84,11 @@ from matplotlib.collections import EllipseCollection
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
 from scipy.ndimage import maximum_filter, gaussian_filter
-from scipy.optimize import curve_fit
 from scipy.interpolate import griddata, CloughTocher2DInterpolator
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 import csv
+import logging
 import os
 import sys
 import queue
@@ -92,6 +102,7 @@ from ppa_core import (
     ProjectValidationError,
     compute_cst_strain,
     compute_local_peak_pair_strain,
+    gaussian_refine_point,
     load_analysis_image,
     load_project as load_versioned_project,
     save_project as save_versioned_project,
@@ -99,6 +110,8 @@ from ppa_core import (
 )
 
 LOCAL_PPA_ALGORITHM_ID = "peak-pairs-local-all-points-v2"
+
+logger = logging.getLogger(__name__)
 
 # 导入 butter.py 的滤波功能 (预处理用)。
 # 优先使用环境变量 PPA_HRTEM_FILTER_DIR 指定的目录，其次回退到历史兄弟目录；
@@ -905,6 +918,8 @@ class AtomMarkerApp:
         self.detect_min_dist = 8     # 最小原子间距
         self.detect_window = 5       # 质心精炼窗口 (奇数)
         self.centroid_method = "com" # "com" | "gaussian"
+        # 工单27: 最近一次高斯精炼的回退统计 (None 或 {n_points,n_fallback,fallback_ratio})
+        self.last_gaussian_refine_stats = None
         self._suggested_threshold = None  # 校准模式推算的阈值（临时）
         self.von_mises_coeff = 4.0 / 9.0  # von Mises 系数 (2D 平面应变严格值=4/9; 文献经验值=2/3)
 
@@ -3644,27 +3659,39 @@ class AtomMarkerApp:
             try:
                 if generation != self._job_generation:
                     return
-                new_points = self._detect_peaks_worker(
+                new_points, gaussian_fallback_stats = self._detect_peaks_worker(
                     min_distance, sigma, window, threshold, bright)
                 self._worker_queue.put(
-                    ('detect_done', generation, (new_points,)))
+                    ('detect_done', generation,
+                     (new_points, gaussian_fallback_stats)))
             except Exception as error:
                 self._worker_queue.put(('detect_error', generation, str(error)))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _finish_auto_detect(self, new_points):
+    def _finish_auto_detect(self, new_points, gaussian_fallback_stats=None):
         """Commit a completed auto-detection on the Tk main thread."""
         if not new_points:
             messagebox.showinfo("提示", "未检测到任何原子点，请调整参数。")
             self.status.config(text="自动检测未找到原子点")
             return
 
+        # 工单27: 记录回退比例供项目元数据存档, 并在界面上提示回退情况
+        self.last_gaussian_refine_stats = gaussian_fallback_stats
+        fallback_note = ""
+        if gaussian_fallback_stats and gaussian_fallback_stats.get('n_fallback'):
+            fallback_note = (
+                f"\n⚠ {gaussian_fallback_stats['n_fallback']}"
+                f"/{gaussian_fallback_stats['n_points']} 个点高斯拟合失败，"
+                f"已回退 COM 亚像素质心 "
+                f"(比例 {gaussian_fallback_stats['fallback_ratio']:.1%})")
+
         # 三选一: 「是」追加(非破坏), 「否」替换(破坏性, 明确标注), 「取消」丢弃。
         choice = messagebox.askyesnocancel(
             "检测完成",
             f"检测到 {len(new_points)} 个原子点\n"
-            f"质心方法: {'COM' if self.centroid_method == 'com' else '2D Gaussian'}\n\n"
+            f"质心方法: {'COM' if self.centroid_method == 'com' else '2D Gaussian'}\n"
+            f"{fallback_note}\n"
             f"如何处理检测结果？\n"
             f"  [是(Y)]   追加到当前列表 (保留已有 {len(self.points)} 个点)\n"
             f"  [否(N)]   替换现有所有点 (当前 {len(self.points)} 个点将被丢弃)\n"
@@ -3681,7 +3708,8 @@ class AtomMarkerApp:
         self._reset_ref_multi_selection()
         self._clear_analysis_results()
         self.refresh_display()
-        self.status.config(text=f"自动检测完成，共 {len(self.points)} 个原子点 (亚像素定位)")
+        self.status.config(text=f"自动检测完成，共 {len(self.points)} 个原子点 (亚像素定位)"
+                                f"{fallback_note.strip()}")
 
     def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright):
         img = self._get_work_image().copy()
@@ -3717,7 +3745,7 @@ class AtomMarkerApp:
 
         coords = np.argwhere(peaks_mask)  # (row, col)
         if len(coords) == 0:
-            return []
+            return [], None
 
         # 4) 按强度排序
         vals = img_filt[peaks_mask]
@@ -3744,7 +3772,7 @@ class AtomMarkerApp:
 
         coords = coords[keep_mask]
         if len(coords) == 0:
-            return []
+            return [], None
 
         # 5) 非极大值抑制（大规模时用向量化贪心，避免 O(N²) 逐点比较）
         selected = []
@@ -3760,6 +3788,7 @@ class AtomMarkerApp:
             selected = np.array(selected)  # (N,2)  (row, col)
 
         # 6) 亚像素质心修正 ⭐
+        gaussian_fallback_stats = None
         if self.centroid_method == "com" and len(selected) > 20:
             # COM 批量矢量化: N>20 时比逐原子调用快 10-50×
             cx_arr, cy_arr = self._refine_centroids_batch(img, selected, window=window)
@@ -3767,18 +3796,33 @@ class AtomMarkerApp:
                           for i in range(len(cx_arr))]
         else:
             # 少数 COM 或高斯拟合: 保留逐原子精修
+            # 工单27: 高斯拟合失败的点会静默回退 COM, 必须计数并提示
+            self._gaussian_fallback_count = 0
             new_points = []
-            for c in selected:
-                cx, cy = self._refine_centroid(img, c[1], c[0], window=window)
+            for i, c in enumerate(selected):
+                cx, cy = self._refine_centroid(img, c[1], c[0], window=window,
+                                               point_index=i + 1)
                 new_points.append((cx, cy))
+            if self.centroid_method == "gaussian":
+                n_fallback = self._gaussian_fallback_count
+                if n_fallback:
+                    logger.warning(
+                        "高斯精炼: %d/%d 个点高斯拟合失败，已回退 COM 亚像素质心",
+                        n_fallback, len(selected))
+                gaussian_fallback_stats = {
+                    'n_points': int(len(selected)),
+                    'n_fallback': int(n_fallback),
+                    'fallback_ratio': (n_fallback / len(selected)) if len(selected) else 0.0,
+                }
 
-        return new_points
+        return new_points, gaussian_fallback_stats
 
-    def _refine_centroid(self, image, x, y, window=5):
+    def _refine_centroid(self, image, x, y, window=5, point_index=None):
         """
         亚像素质心精炼 (COM 迭代收敛)
         x, y: 整数像素坐标 (col, row)
         window: 局部窗大小 (奇数)
+        point_index: 1 起算的点序号, 仅用于高斯回退时的告警定位
         返回: (sub_x, sub_y) 亚像素坐标
         """
         # 高斯拟合 (单次; 失败或越界则回退 COM)
@@ -3786,6 +3830,12 @@ class AtomMarkerApp:
             fit = self._gaussian_fit_window(image, x, y, window)
             if fit is not None:
                 return fit
+            # 工单27: 回退不再静默 —— 计数 + 日志, 汇总比例由调用方上报
+            self._gaussian_fallback_count = getattr(
+                self, '_gaussian_fallback_count', 0) + 1
+            logger.warning(
+                "第 %s 个点高斯拟合失败，已回退 COM 亚像素质心",
+                point_index if point_index is not None else "?")
 
         # COM: 迭代 2 次, 每次以前次质心重新居中窗口, 消除窗口偏心偏差
         hw = window // 2
@@ -3832,51 +3882,15 @@ class AtomMarkerApp:
         """
         2D 高斯拟合亚像素定位 (供 _refine_centroid 调用)
 
+        工单27: 拟合实现收敛到 ppa_core.refine.gaussian_refine_point
+        (与 atomic_core 同源口径的规范实现), 本方法仅保留
+        "(sub_x, sub_y) 或 None (拟合失败)" 的旧契约。
+
         初值取 ROI 内峰值位置 (而非固定几何中心), 适配靠边原子;
         校验拟合中心偏离初始位置不超过窗口半径, 防止误收敛到邻近峰。
-
-        返回: (sub_x, sub_y) 或 None (拟合失败)
         """
-        hw = window // 2
-        H, W = image.shape
-        xi, yi = int(round(x)), int(round(y))
-        y0 = max(0, yi - hw)
-        y1 = min(H, yi + hw + 1)
-        x0 = max(0, xi - hw)
-        x1 = min(W, xi + hw + 1)
-        if y1 - y0 < 3 or x1 - x0 < 3:
-            return None
-
-        roi = image[y0:y1, x0:x1].astype(np.float64)
-        bg = np.percentile(roi, 5)
-        roi = np.maximum(roi - bg, 0)
-        if roi.max() <= 0:
-            return None
-
-        try:
-            def gauss2d(xy, xo, yo, sx, sy, A, bg2):
-                xv, yv = xy
-                return A * np.exp(-((xv - xo) ** 2 / (2 * max(sx, 0.3) ** 2)
-                                    + (yv - yo) ** 2 / (2 * max(sy, 0.3) ** 2))) + bg2
-
-            ys, xs = np.mgrid[0:roi.shape[0], 0:roi.shape[1]]
-            xdata = np.vstack((xs.ravel(), ys.ravel()))
-            ydata = roi.ravel()
-            # 初值: ROI 内峰值位置 (靠边窗口不再以几何中心为初值)
-            pk_r, pk_c = np.unravel_index(np.argmax(roi), roi.shape)
-            p0 = [float(pk_c), float(pk_r), 1.0, 1.0, float(roi.max()), 0]
-            bounds = ([0, 0, 0.3, 0.3, 0, -np.inf],
-                      [roi.shape[1] - 1, roi.shape[0] - 1, 5, 5, np.inf, np.inf])
-            popt, _ = curve_fit(gauss2d, xdata, ydata, p0=p0,
-                                bounds=bounds, maxfev=500)
-            cx = x0 + popt[0]
-            cy = y0 + popt[1]
-            # 校验: 偏离初始位置不超过窗口半径 (原先误用整个窗口宽, 宽松 2 倍)
-            if abs(cx - x) <= hw and abs(cy - y) <= hw:
-                return cx, cy
-        except Exception:
-            pass
-        return None
+        cx, cy, fitted = gaussian_refine_point(image, x, y, window)
+        return (cx, cy) if fitted else None
 
     def _refine_centroids_batch(self, image, coords_rc, window=5, iterations=2):
         """
@@ -5083,6 +5097,8 @@ class AtomMarkerApp:
             'detect_params': {
                 'sigma': self.detect_sigma, 'min_dist': self.detect_min_dist,
                 'window': self.detect_window, 'method': self.centroid_method,
+                # 工单27: 高斯精炼回退比例入档, 便于追溯坐标质量
+                'gaussian_fallback': getattr(self, 'last_gaussian_refine_stats', None),
             },
             # 预处理设置一并存档, 否则加载后无法复现"用预处理图检测"的流程
             'preprocess': {
@@ -5205,6 +5221,17 @@ class AtomMarkerApp:
         self.detect_min_dist = float(params.get('min_dist', self.detect_min_dist))
         self.detect_window = int(params.get('window', self.detect_window))
         self.centroid_method = params.get('method', self.centroid_method)
+        # 工单27: 恢复高斯精炼回退统计 (旧项目文件无此键 -> 保持 None)
+        fallback_stats = params.get('gaussian_fallback')
+        if isinstance(fallback_stats, dict) and \
+                {'n_points', 'n_fallback', 'fallback_ratio'} <= set(fallback_stats):
+            self.last_gaussian_refine_stats = {
+                'n_points': int(fallback_stats['n_points']),
+                'n_fallback': int(fallback_stats['n_fallback']),
+                'fallback_ratio': float(fallback_stats['fallback_ratio']),
+            }
+        else:
+            self.last_gaussian_refine_stats = None
         reference = data.get('reference')
         self.reference_metadata = None
         if reference:

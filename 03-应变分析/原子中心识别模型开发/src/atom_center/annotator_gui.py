@@ -22,7 +22,20 @@ from .annotations import (
 )
 from .image_io import load_image, normalize_percentile
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 BUNDLED_FONT_FAMILY = "Noto Sans CJK SC"
+# Audit 56: the repository does not ship the .otf; when the optional asset is
+# absent the UI falls back to platform CJK-capable system fonts instead.
+_SYSTEM_FONT_FALLBACK = "Microsoft YaHei"
 _BUNDLED_FONT_CONFIGURED: bool | None = None
 
 _COMMON_METADATA_FIELDS = (
@@ -73,7 +86,12 @@ def bundled_font_path() -> Path:
 
 
 def configure_bundled_font() -> bool:
-    """Load the bundled CJK font privately without modifying the host system."""
+    """Load the optional bundled CJK font privately without modifying the host.
+
+    Returns False when the optional font asset is absent or cannot be
+    registered; callers must then fall back to system fonts (audit 56: the
+    repository does not ship the .otf by default).
+    """
 
     global _BUNDLED_FONT_CONFIGURED
     if _BUNDLED_FONT_CONFIGURED is not None:
@@ -103,10 +121,26 @@ def configure_bundled_font() -> bool:
     return _BUNDLED_FONT_CONFIGURED
 
 
+def ui_font_family() -> str:
+    """Family for explicitly styled widgets: the bundled CJK font when the
+    optional asset is available, otherwise a system CJK-capable font (Windows)
+    or the bundled family name, which Tk substitutes with its default when
+    unregistered."""
+
+    if configure_bundled_font():
+        return BUNDLED_FONT_FAMILY
+    import os
+
+    return _SYSTEM_FONT_FALLBACK if os.name == "nt" else BUNDLED_FONT_FAMILY
+
+
 def apply_tk_font_defaults(root: object) -> None:
     import tkinter.font as tkfont
 
-    configure_bundled_font()
+    if not configure_bundled_font():
+        # Audit 56: no bundled font asset — keep the system default Tk fonts
+        # (Tk/font linking renders CJK through whatever the OS provides).
+        return
     for name in (
         "TkDefaultFont",
         "TkTextFont",
@@ -1341,22 +1375,23 @@ class StartupDialog:
 
         frame = ttk.Frame(root, padding=22)
         frame.pack(fill=tk.BOTH, expand=True)
+        family = ui_font_family()
         ttk.Label(
             frame,
             text="原子中心标注器",
-            font=(BUNDLED_FONT_FAMILY, 18, "bold"),
+            font=(family, 18, "bold"),
         ).pack(anchor=tk.W)
         ttk.Label(
             frame,
             text="HAADF-STEM / HRTEM 原子中心精确点位标注",
-            font=(BUNDLED_FONT_FAMILY, 10),
+            font=(family, 10),
             foreground="#555555",
         ).pack(anchor=tk.W, pady=(2, 14))
 
         ttk.Label(
             frame,
             text="如果负责人发给你一个任务包，请使用这一项：",
-            font=(BUNDLED_FONT_FAMILY, 11, "bold"),
+            font=(family, 11, "bold"),
         ).pack(anchor=tk.W, pady=(0, 5))
         self.open_button = ttk.Button(
             frame,
@@ -1374,7 +1409,7 @@ class StartupDialog:
         ttk.Label(
             frame,
             text="任务负责人：创建新的空任务",
-            font=(BUNDLED_FONT_FAMILY, 11, "bold"),
+            font=(family, 11, "bold"),
         ).pack(anchor=tk.W)
         ttk.Label(
             frame,
@@ -1568,6 +1603,9 @@ def run_packaged_smoke_test(report_path: str | Path) -> int:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "bundled_font_registered": configure_bundled_font(),
+        # Audit 56: the .otf is an optional asset; consumers must only require
+        # "bundled_font_registered" when this presence flag is true.
+        "bundled_font_asset_present": bundled_font_path().is_file(),
     }
     try:
         with tempfile.TemporaryDirectory(prefix="atom-annotator-smoke-") as temporary:

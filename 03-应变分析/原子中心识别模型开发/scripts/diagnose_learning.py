@@ -21,6 +21,16 @@ from ultralytics.nn.tasks import DetectionModel
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils.torch_utils import init_seeds
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class MemorizationTrainer(DetectionTrainer):
     def build_dataset(self, img_path, mode="train", batch=None):

@@ -12,6 +12,16 @@ from atom_center.image_io import load_image, normalize_percentile
 from atom_center.storage import read_json, write_json
 from atom_center.metrics import match_points
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main():
     root=Path(__file__).resolve().parents[1];out=root/'runs/generalization-20260910/localization_audit';out.mkdir(exist_ok=True)
     m,p,h=checkpoint_for_run(root/'runs/point-selection-20260909',checkpoint='best_points.pt')

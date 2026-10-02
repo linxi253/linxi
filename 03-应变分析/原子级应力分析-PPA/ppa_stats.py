@@ -11,6 +11,15 @@ PPA 数据统计分析与可视化工具 (PPA Stats) v1.0
 
 依赖: numpy, scipy, matplotlib, tifffile, tkinter
 """
+import sys
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 try:
     import tkinter as tk
@@ -734,6 +743,9 @@ class PPAStatsApp:
                     if isinstance(value, np.ndarray) and len(value) == original_count:
                         result[key] = value[keep]
                 result['n'] = int(keep.sum())
+            # 工单18：提交新文件数据前清空上一份文件残留的 GL 分量，
+            # 否则新 CSV 无 GL 列时旧文件的 gl_* 会继续参与统计。
+            self.data.strain_gl = {}
             self.data.tri_centroids = result['centroids']
             self.data.strain_xx = result['strain_xx']
             self.data.strain_yy = result['strain_yy']

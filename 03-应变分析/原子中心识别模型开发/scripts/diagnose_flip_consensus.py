@@ -12,6 +12,16 @@ from atom_center.configuration import pipeline_config
 from atom_center.evaluation import evaluate_dataset
 from atom_center.storage import write_json
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 class FlipConsensus:
     def __init__(self,backend,radius=3.,votes=2):
         self.backend=backend;self.name='experimental_flip_consensus';self.model_sha256=backend.model_sha256

@@ -22,6 +22,9 @@ data/manifests/*_annotations.csv
 runs/**
 reports/**/*.html
 reports/**/*.png
+# Audit 35: unpublished experiment metrics/thresholds and test-set codenames
+# live only in this local file; experiment_records.example.json holds the schema.
+configs/local/experiment_records.json
 
 # Model binaries are registered by manifest and SHA-256, not committed directly.
 registry/**/*.pt

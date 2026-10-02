@@ -7,9 +7,16 @@ name = "atom-center"
 version = "0.3.0"
 description = "Shared development foundation for HAADF-STEM and HRTEM atom-center models"
 readme = "README.md"
+# 隔离边界声明（审计 42）：本子项目有意钉在 CPython 3.10 + numpy 1.26.4 /
+# opencv 4.11 的训练与推理栈上；仓库内其余工具使用 numpy 2.2.6。两组精确
+# 钉死的版本不能并入同一份统一依赖，跨项目调用必有版本落差；若要统一，
+# 必须先解除 <3.11 约束，再重新验证训练、ONNX 导出与纯 CPU 推理三条链路。
+# 本文件与 requirements/ 三份锁文件（inference-win-py310 / training-win-py310 /
+# lock-win-cu128）中的 numpy==1.26.4 保持一致，改动时须同步。
 requires-python = ">=3.10,<3.11"
 dependencies = [
   "matplotlib==3.10.9",
+  # 隔离边界（审计 42）：其余工具为 numpy 2.2.6；统一的先决条件是解除 <3.11。
   "numpy==1.26.4",
   "Pillow==11.3.0",
   "PyYAML==6.0.3",

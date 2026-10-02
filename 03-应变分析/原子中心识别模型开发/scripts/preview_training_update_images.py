@@ -11,6 +11,15 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -30,7 +39,13 @@ def resolve_path(audit, name):
     on_disk = ROOT.parent / '原子标注/测试集2' / name
     if on_disk.is_file():
         return on_disk
-    return RUN / 'extracted/测试集3_ncm811-2' / name
+    # Audit 35: extraction locations (whose labels carry test-set codenames) are
+    # read from the recorded audit instead of being hardcoded here.
+    for entry in audit.get('extraction', {}).values():
+        directory = entry.get('directory') if isinstance(entry, dict) else None
+        if directory and (Path(directory) / name).is_file():
+            return Path(directory) / name
+    return RUN / 'extracted' / name
 
 
 def main():

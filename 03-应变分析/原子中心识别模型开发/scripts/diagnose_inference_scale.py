@@ -8,6 +8,16 @@ from atom_center.configuration import pipeline_config
 from atom_center.evaluation import evaluate_dataset
 from atom_center.storage import write_json
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main():
     root=Path(__file__).resolve().parents[1];out=root/'runs/generalization-20260910/tile_scale';out.mkdir(exist_ok=False)
     m,p,h=checkpoint_for_run(root/'runs/point-selection-20260909',checkpoint='best_points.pt')

@@ -34,6 +34,16 @@ from ppa_core.image_io import ImageLoadError, load_analysis_image
 from ppa_core.project_store import ProjectValidationError, load_project, save_project
 from ppa_core.strain import AnalysisError, compute_cst_strain, compute_local_peak_pair_strain
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def square_grid(size: int = 5) -> np.ndarray:
     return np.array([(x, y) for y in range(size) for x in range(size)], dtype=float)

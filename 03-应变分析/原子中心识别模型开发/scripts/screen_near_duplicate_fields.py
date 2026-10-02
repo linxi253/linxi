@@ -9,6 +9,15 @@ import json
 import sys
 import numpy as np
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from atom_center.image_io import load_image                             # noqa: E402
@@ -58,11 +67,17 @@ def main():
             references[f'{dataset}/raw/{path.name}'] = path
 
     print(f'{len(candidates)} candidates against {len(references)} references', flush=True)
+    # Audit 35: extraction locations (whose labels carry test-set codenames) are
+    # read from the recorded audit instead of being hardcoded here.
+    extracted = [Path(entry['directory']) for entry in audit.get('extraction', {}).values()
+                 if isinstance(entry, dict) and entry.get('directory')]
     cache = {}
     rows = {}
     for name, value in sorted(candidates.items()):
         on_disk = ANN / '测试集2' / name
-        path = on_disk if on_disk.is_file() else RUN / 'extracted/测试集3_ncm811-2' / name
+        path = on_disk if on_disk.is_file() else next(
+            (directory / name for directory in extracted if (directory / name).is_file()),
+            extracted[0] / name if extracted else on_disk)
         if not path.is_file():
             raise FileNotFoundError(path)
         vector = cache.setdefault(str(path), descriptor(path))

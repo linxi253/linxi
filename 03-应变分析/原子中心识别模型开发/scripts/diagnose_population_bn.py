@@ -13,6 +13,16 @@ from atom_center.preprocessing import input_tensor
 from atom_center.evaluation import evaluate_dataset
 from atom_center.storage import write_json
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--run',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(exist_ok=False)
     m,path,h=checkpoint_for_run(a.run,checkpoint='best_points.pt');b=TorchBackend(path,expected_sha256=h,contract=m['contract'],inference=m['config']['inference'],device='cuda:0')

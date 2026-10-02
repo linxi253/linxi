@@ -23,6 +23,15 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import matplotlib
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 try:
     matplotlib.use("TkAgg")
 except Exception:
@@ -2971,6 +2980,12 @@ class AtomicRecognitionApp:
             self.frame_detection_params[index] = frame["detection_params"]
             self.frame_intensity_params[index] = frame["intensity_params"]
         self._sync_parameter_vars()
+        # 显示控件一并回填：否则打开会话后 Scale/复选框仍停留在旧位置，
+        # 而 _update_marker_radius/_toggle_ids 又从绑定变量读值，控件与状态脱钩。
+        # 实测对绑定变量 .set() 不会同步触发 Scale 的 -command，标签需一并同步。
+        self.marker_radius_var.set(float(self.marker_radius))
+        self.marker_radius_label.configure(text=f"{self.marker_radius:.1f} px")
+        self.show_ids_var.set(bool(self.show_ids))
         self._update_detection_summary()
         self._refresh_rule_tree()
         self.show_frame(reset_view=True)

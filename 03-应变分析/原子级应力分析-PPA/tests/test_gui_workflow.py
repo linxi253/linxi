@@ -9,6 +9,16 @@ import numpy as np
 
 import ppa
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class FullPointPpaWorkflowTests(unittest.TestCase):
     def test_index_collision_keeps_every_confirmed_atom_and_shows_one_report(self):

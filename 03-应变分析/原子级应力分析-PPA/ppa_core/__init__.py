@@ -9,6 +9,7 @@ from .strain import (
 )
 from .image_io import ImageData, ImageLoadError, load_analysis_image
 from .project_store import ProjectValidationError, load_project, save_project
+from .refine import gaussian_refine_point
 
 __all__ = [
     "AnalysisError",
@@ -22,4 +23,5 @@ __all__ = [
     "ProjectValidationError",
     "load_project",
     "save_project",
+    "gaussian_refine_point",
 ]

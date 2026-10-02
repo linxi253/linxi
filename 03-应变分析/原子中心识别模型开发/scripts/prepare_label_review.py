@@ -5,6 +5,16 @@ from atom_center.annotations import AnnotationProject
 from atom_center.data_workflow import verify_dataset
 from atom_center.storage import read_json,write_json
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main():
     root=Path(__file__).resolve().parents[1];out=root/'runs/generalization-20260910/review_projects/difficult_labels';out.mkdir(exist_ok=False)
     (out/'images').mkdir();m,data=verify_dataset(root/'data/processed/real_workflow_20260909_v2')

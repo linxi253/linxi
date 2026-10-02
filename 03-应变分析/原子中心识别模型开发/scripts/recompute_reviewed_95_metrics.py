@@ -14,6 +14,15 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.spatial import cKDTree
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -279,7 +288,7 @@ def main():
         verdicts[number] = {'scopes': scopes, 'passes_image_95': bool(image_pass)}
     fixed['verdict_95'] = {'pass_threshold': PASS_THRESHOLD, 'radius_px': 2.0,
                            'per_image': verdicts, 'all_images_pass': bool(all_pass)}
-    write_json(validation_path := RUN / 'validation.json', fixed)
+    write_json(RUN / 'validation.json', fixed)
 
     summary = {
         'task_id': 'reviewed-95-validation-20260910', 'updated_utc': utc_now(),

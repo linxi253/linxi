@@ -10,6 +10,15 @@ import shutil
 import sys
 from datetime import datetime, timezone
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from atom_center.storage import write_json                                # noqa: E402
@@ -17,9 +26,27 @@ from atom_center.storage import write_json                                # noqa
 RUN = ROOT / 'runs/reviewed-95-validation-20260910'
 SNAPSHOT = RUN / 'dsh_result_prefix01_snapshot.json'
 REPORT = ROOT / 'reports/REVIEWED_95_VALIDATION_20260910.md'
+# Audit 35: the previous round's train/val F1 values are unpublished experiment
+# results, so they are read from configs/local/ (gitignored), never hardcoded.
+LOCAL_RECORDS = ROOT / 'configs/local/experiment_records.json'
 SCOPE_LABELS = {'full_image_full_csv': '整图推理 → 整张 CSV',
                 'full_image_on_original_roi': '整图推理 → 原选区',
                 'roi_only_inference': '直接在原选区推理'}
+
+
+def previous_round_reference():
+    path = LOCAL_RECORDS
+    if not path.is_file():
+        raise SystemExit(f'missing local experiment records: {path}; copy '
+                         'configs/local/experiment_records.example.json and fill in the '
+                         'write_reviewed_95_deliverables section on the machine that owns '
+                         'the data (audit 35: unpublished metrics stay out of the repository)')
+    payload = json.loads(path.read_text(encoding='utf-8-sig'))
+    section = (payload.get('write_reviewed_95_deliverables') or {}).get('previous_round_reference')
+    if not isinstance(section, dict) or 'train_f1' not in section or 'val_f1' not in section:
+        raise SystemExit(f'{path} lacks '
+                         'write_reviewed_95_deliverables.previous_round_reference.train_f1/val_f1')
+    return section
 
 
 def utc_now():
@@ -162,11 +189,11 @@ def main():
         'cross_check_against_codex_audit': summary['cross_check_against_codex_audit'],
         'previous_round_reference': {
             'old_train_val_regression': 'runs/training-update-20260910/regression_region_identity.json (referenced, not re-run)',
-            'train_f1': 0.9161686495970174, 'val_f1': 0.9648212226066898},
+            **previous_round_reference()},
         'artifacts': {'validation': 'runs/reviewed-95-validation-20260910/validation.json',
                       'metrics_summary': 'runs/reviewed-95-validation-20260910/metrics_summary.json',
                       'raw_coordinates': sorted(str(path.relative_to(ROOT).as_posix())
-                                                for path in RAW.glob('*.json')) if (RAW := RUN / 'raw_outputs') else [],
+                                                for path in (RUN / 'raw_outputs').glob('*.json')),
                       'figures': sorted(str(path.relative_to(ROOT).as_posix()) for path in (RUN / 'figures').glob('*.png')),
                       'report_tables': 'runs/reviewed-95-validation-20260910/report_tables.md',
                       'pre_fix_snapshot': 'runs/reviewed-95-validation-20260910/dsh_result_prefix01_snapshot.json',

@@ -12,6 +12,15 @@ import zipfile
 from datetime import datetime, timezone
 import numpy as np
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -25,10 +34,30 @@ EXTRACT = RUN / 'extracted'
 PREVIEW = ROOT / 'runs/generalization-20260910/final_testset2_preview'
 DATASETS = {'real_workflow_20260909_v2': ROOT / 'data/processed/real_workflow_20260909_v2',
             'reviewed_targets_20260910': ROOT / 'data/processed/reviewed_targets_20260910'}
-ZIPS = {'测试集2_NCM811': ANN / '测试集2/NCM811.zip',
-        '测试集3_ncm811-2': ANN / '测试集3/ncm811-2.zip'}
+# Audit 35: the zip labels and locations carry internal test-set codenames, so
+# they live in configs/local/ (gitignored), never in the public repository.
+LOCAL_RECORDS = ROOT / 'configs/local/experiment_records.json'
 IMAGE_SUFFIXES = {'.tif', '.tiff', '.png'}
 FIRST_ROUND_END = '2026-09-10T05:45'
+
+
+def local_zip_sources():
+    path = LOCAL_RECORDS
+    if not path.is_file():
+        raise SystemExit(f'missing local experiment records: {path}; copy '
+                         'configs/local/experiment_records.example.json and fill in the '
+                         'zip_sources entries on the machine that owns the data '
+                         '(audit 35: codenames stay out of the repository)')
+    payload = json.loads(path.read_text(encoding='utf-8-sig'))
+    try:
+        section = payload['audit_training_update_inputs']['zip_sources']
+    except (KeyError, TypeError):
+        raise SystemExit(f'{path} lacks audit_training_update_inputs.zip_sources') from None
+    sources = {}
+    for label, entry in section.items():
+        archive = Path(entry)
+        sources[label] = archive if archive.is_absolute() else ANN / archive
+    return sources
 
 
 def sha256_file(path, chunk=1 << 20):
@@ -116,6 +145,7 @@ def walk(directory, suffixes=IMAGE_SUFFIXES):
 
 
 def main():
+    ZIPS = local_zip_sources()
     RUN.mkdir(parents=True, exist_ok=True)
     audit = {'task_id': 'training-update-20260910', 'phase': 'input_audit',
              'updated_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),

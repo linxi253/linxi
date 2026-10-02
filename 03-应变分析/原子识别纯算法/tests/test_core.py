@@ -34,6 +34,16 @@ from atomic_core import (
     rule_for_percentile,
 )
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def gaussian_frame(shape, centers, sigma=1.2, background=10.0, amplitude=100.0):
     yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]

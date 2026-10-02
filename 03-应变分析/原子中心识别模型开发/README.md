@@ -38,6 +38,8 @@ python scripts\smoke_test.py
 
 本机原 Miniconda Python 的 ONNX 原生校验器会崩溃；安装脚本准备了项目内官方 CPython 3.10.11 运行时。训练/导出统一运行 `scripts/atom-center.ps1`，标注 GUI 继续使用现有 `.venv` 启动入口。
 
+**版本隔离边界（审计 42）：** 本子项目钉死 CPython 3.10（`requires-python >=3.10,<3.11`）与 numpy 1.26.4 / opencv 4.11；`pyproject.toml` 与 `requirements/` 下的三份锁文件一致，仓库内其余工具则使用 numpy 2.2.6。这是有意的隔离边界，不是遗漏：两组精确钉死的版本不能并入同一份统一依赖，跨进程/跨工具调用必然存在版本落差。若确需统一到 numpy 2.x，必须先解除 `<3.11` 约束，再重新验证训练、ONNX 导出与纯 CPU 推理三条链路，并同步更新 `pyproject.toml` 与全部锁文件。
+
 ## 数据原则
 
 1. 原始图像只读保存于 `data/raw/<modality>/`。
@@ -74,6 +76,9 @@ python scripts\smoke_test.py
 ## Windows 便携发行版
 
 打包脚本先构建并自检 PyInstaller one-folder 便携版，再构建 one-file 备用版；最终 ZIP、单文件 EXE 和 SHA-256 清单写入 `release/`。便携版支持 Windows 10/11 x64，不要求目标电脑安装 Python 或使用管理员权限。发行与标注任务分发方法见 [Windows 便携版说明](docs/windows-portable-release.md)。
+
+注意：打包版本资源 `packaging/windows_version_info.txt` 是手写副本，可能滞后于
+`pyproject.toml`；发布前需核对同步（当前资源记录 0.2.4，落后于单一来源的 0.3.0）。
 
 标注人员无需使用命令行或寻找项目 JSON：启动后选择负责人发送的整个任务文件夹即可。启动页会按系统显示缩放自动调整，主界面右侧参数区在小屏幕上可滚动。
 

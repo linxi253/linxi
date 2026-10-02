@@ -86,11 +86,11 @@ $projects = @(Get-ChildItem data/annotation_projects/migrated_20260906 -Filter a
 
 ## 4. 配置与训练
 
-**点位选择开发候选（2026-09-09）：** 已实现并实测 `best_points.pt` 选择，第 45 轮候选在原有验证集 F1=95.56%，实际运行清单使用 COM7 和最大位移 2.4 像素（原文 COM11 已更正）。模型清单为 `runs/point-selection-20260909/onnx-points/model_manifest.json`，配置为 `configs/experiments/haadf_point_selected_150.yaml`，报告见 `reports/POINT_SELECTION_2026-09-09.md`。不替代原来的科研验收条件。
+**点位选择开发候选（2026-09-09）：** 已实现并实测 `best_points.pt` 选择，第 45 轮候选在原有验证集上的点位 F1 属未发表实验结果，具体数值只在内部训练记录与本地报告中保存（审计 35：不写入公开文档）；实际运行清单使用 COM7 和最大位移 2.4 像素（原文 COM11 已更正）。模型清单为 `runs/point-selection-20260909/onnx-points/model_manifest.json`，配置为 `configs/experiments/haadf_point_selected_150.yaml`，报告见 `reports/POINT_SELECTION_2026-09-09.md`。不替代原来的科研验收条件。
 
-**最新开发候选（2026-09-10）：** 已完成四组共 800 轮训练对照，采用间距训练框、关闭增强训练的第 135 轮权重及自适应亮斑精修。清单为 `runs/generalization-20260910/adaptive_blob-onnx/model_manifest.json`；训练集 P/R=92.95%/93.87%，验证集 P/R=95.73%/97.22%，匹配距离仍为原图 2 像素。困难图像及无人工真值的两个测试集尚未通过验收，仅用于预标注。详细指标、图像预览和独立 draft 复核项目见 `reports/GENERALIZATION_2026-09-10.md`。该清单需要当前源码中的 `adaptive_blob` 和精修后去重支持，旧版 0.3.0 安装包不能直接解释新增配置；PPA 默认候选未更换。
+**最新开发候选（2026-09-10）：** 已完成四组共 800 轮训练对照，采用间距训练框、关闭增强训练的第 135 轮权重及自适应亮斑精修。清单为 `runs/generalization-20260910/adaptive_blob-onnx/model_manifest.json`；训练集与验证集的 P/R 属未发表实验结果，具体数值只在内部训练记录与本地报告中保存（审计 35），匹配距离仍为原图 2 像素。困难图像及无人工真值的两个测试集尚未通过验收，仅用于预标注。详细指标、图像预览和独立 draft 复核项目见 `reports/GENERALIZATION_2026-09-10.md`。该清单需要当前源码中的 `adaptive_blob` 和精修后去重支持，旧版 0.3.0 安装包不能直接解释新增配置；PPA 默认候选未更换。
 
-**可运行开发基线（2026-09-09 后续）：** 两组 150 轮完整训练侧对照已完成，当前保留 8 像素框、IoU=0.45、COM；原有验证集点位 F1=93.36%。可复现配置为 `configs/experiments/haadf_workflow_baseline_150.yaml`，新模型清单位于 `runs/box-comparison-20260909/box8/onnx/model_manifest.json`。详见 `reports/BOX_COMPARISON_2026-09-09.md`。这是开发基线，不是科研验收；测试集未用于本次对照。
+**可运行开发基线（2026-09-09 后续）：** 两组 150 轮完整训练侧对照已完成，当前保留 8 像素框、IoU=0.45、COM；原有验证集点位 F1 属未发表实验结果，具体数值只在内部训练记录中保存（审计 35）。可复现配置为 `configs/experiments/haadf_workflow_baseline_150.yaml`，新模型清单位于 `runs/box-comparison-20260909/box8/onnx/model_manifest.json`。详见 `reports/BOX_COMPARISON_2026-09-09.md`。这是开发基线，不是科研验收；测试集未用于本次对照。
 
 **2026-09-09 排查发现：** 固定 8 原图像素框配合随机初始化，在部分真实样本上出现有效正样本权重过低；扩大框又会影响 NMS 对相邻原子的保留。默认值尚不能视为已验证正式方案。长训练前先核查网络输入上的目标尺度、正样本分配和无增强小样本过拟合，详见 `reports/LEARNING_DIAGNOSIS_2026-09-09.md`。3 轮/18 次优化更新仅证明流程执行，不证明模型可用。
 

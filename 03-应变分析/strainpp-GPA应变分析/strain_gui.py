@@ -19,6 +19,15 @@ from tkinter import ttk, filedialog, messagebox
 
 import numpy as np
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 # 确保可以导入同目录模块
 _curdir = os.path.dirname(os.path.abspath(__file__))
 if _curdir not in sys.path:
@@ -1311,9 +1320,13 @@ class StrainGUI:
             # 首次绘制
             ax.clear()
             style_axes(ax)
+            # extent 取 (-0.5, N-0.5, M-0.5, -0.5)：像素中心落在整数数据坐标，
+            # event.xdata/ydata 直接等于功率谱数组下标 (col, row)，
+            # 点击反算 gx = x - N//2 才与掩膜的峰位 (N//2+gx, M//2+gy) 严格一致
+            # （strainpp_gpa/phase.py：forward_fft 用 fftshift，DC 在 (M//2, N//2)）。
             im = ax.imshow(
                 display_ps, cmap=self.cmap_power, aspect='equal',
-                origin='upper', extent=(0, N, M, 0),
+                origin='upper', extent=(-0.5, N - 0.5, M - 0.5, -0.5),
                 vmin=power_vmin, vmax=power_vmax,
             )
 
@@ -1336,7 +1349,7 @@ class StrainGUI:
         else:
             # 更新已有图像（保持缩放和标记）
             old_im.set_data(display_ps)
-            old_im.set_extent((0, N, M, 0))
+            old_im.set_extent((-0.5, N - 0.5, M - 0.5, -0.5))
             old_im.set_cmap(self.cmap_power)
             old_im.set_clim(power_vmin, power_vmax)
 
@@ -1369,8 +1382,10 @@ class StrainGUI:
         if not np.isfinite(x) or not np.isfinite(y):
             return
         M, N = self.gpa.shape
-        # 基础校验：点击必须落在有效像素范围内（最右/最下像素为 N-1/M-1，
-        # 恰好点在 extent 右/下边缘的 N/M 处会得到超出 FFT 坐标范围的 G）。
+        # 基础校验：extent=(-0.5, N-0.5, M-0.5, -0.5) 下像素中心恰在整数数据
+        # 坐标 0..N-1 / 0..M-1，event.xdata/ydata 即功率谱数组下标 (col, row)；
+        # gx = x - N//2 与掩膜峰位 (N//2+gx, M//2+gy) 严格一致（无半像素偏移）。
+        # extent 边缘的半像素区（<0 或 >N-1）不属于任何像素中心，同样拒绝。
         if not (0 <= x <= N - 1 and 0 <= y <= M - 1):
             self.statusbar.config(text=f'选点 ({x:.1f}, {y:.1f}) 超出图像范围，请重新点击')
             return

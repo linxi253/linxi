@@ -59,12 +59,27 @@ class PointCheckpointSelector:
         settings=self.contract["config"]["point_validation"]
         return epoch==1 or epoch%settings["interval_epochs"]==0 or final
 
-    def consider(self,checkpoint,epoch,metrics):
+    def _register_checkpoint_anchor(self,checkpoint,epoch):
+        """Audit 28: hash the freshly saved checkpoint once and persist the digest
+        in the selection state BEFORE any deserialization. The persisted value is
+        the anchor TorchBackend must verify against; deriving the expected hash
+        from the same file right next to the load would make the integrity gate
+        tautological (expected == actual by construction)."""
+        digest=sha256_file(checkpoint)
+        pending=self.state.setdefault("pending_checkpoint_sha256",{})
+        pending[str(epoch)]=digest
+        write_json(self.path,self.state)
+        return digest
+
+    def consider(self,checkpoint,epoch,metrics,checkpoint_sha256=None):
         if (metrics.get("split")!="val" or metrics.get("dataset_content_sha256")!=self.contract["dataset_sha256"]
                 or metrics.get("match_distance_px")!=self.contract["config"]["point_validation"]["match_distance_px"]):
             raise ValueError("point checkpoint selection requires the configured validation dataset and distance")
         rank=point_metric_rank(metrics)
-        digest=sha256_file(checkpoint)
+        digest=checkpoint_sha256 or sha256_file(checkpoint)
+        registered=self.state.get("pending_checkpoint_sha256",{}).pop(str(epoch),None)
+        if registered is not None and registered!=digest:
+            raise ValueError("checkpoint changed after the point-validation anchor was recorded")
         # Recovered training may repeat an epoch after an interruption. Keep
         # each checkpoint identity instead of silently overwriting its evidence.
         report_name=f"epoch_{epoch:04d}_{digest[:12]}.json"
@@ -94,11 +109,16 @@ class PointCheckpointSelector:
         from .configuration import pipeline_config
         from .evaluation import evaluate_dataset
         config=self.contract["config"]
-        backend=TorchBackend(checkpoint,expected_sha256=sha256_file(checkpoint),contract=self.contract["contract"],
+        # Audit 28: the expected digest is the anchor persisted when the
+        # checkpoint entered this selector, never a hash computed next to the
+        # load (a self-computed expected value makes TorchBackend's gate
+        # compare a file with itself and never fire).
+        anchor=self._register_checkpoint_anchor(checkpoint,epoch)
+        backend=TorchBackend(checkpoint,expected_sha256=anchor,contract=self.contract["contract"],
                              inference=config["inference"],device=device)
         pipe=DetectionPipeline(backend,pipeline_config(config))
         metrics=evaluate_dataset(pipe,data_root,split="val",max_distance_px=config["point_validation"]["match_distance_px"])
-        improved=self.consider(checkpoint,epoch,metrics)
+        improved=self.consider(checkpoint,epoch,metrics,checkpoint_sha256=anchor)
         print(f"Point validation epoch {epoch}: F1={metrics['f1']:.6f}, recall={metrics['recall']:.6f}, "
               f"RMSE={metrics['rmse_px']}, best_updated={improved}",flush=True)
         return metrics

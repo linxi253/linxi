@@ -5,6 +5,16 @@ import numpy as np
 
 from strain_gui import StrainGUI
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class FakeResult:
     """Minimal stand-in for GPAOutput with raw (unmasked) fields."""
@@ -98,6 +108,72 @@ class AutomaticLimitsTests(unittest.TestCase):
             StrainGUI._automatic_limits('eps_xx', np.array([]), True),
             (0.0, 1.0),
         )
+
+
+class PowerSpectrumCoordinateTests(unittest.TestCase):
+    """Power-spectrum click convention: pixel centres on integer data coords.
+
+    Regression for the audit finding: with ``extent=(0, N, M, 0)`` pixel
+    centres sit at half-integer coordinates while the click back-calculation
+    assumes integer array indices, so every picked G vector came out +0.5 px
+    in both components.
+    """
+
+    def _power_extent(self, rows, cols):
+        """Evaluate the extent expressions found in _show_power_spectrum."""
+        import inspect
+        import re
+
+        source = inspect.getsource(StrainGUI._show_power_spectrum)
+        expressions = re.findall(r"extent=\(([^)]*)\)", source)
+        expressions += re.findall(r"set_extent\(\(([^)]*)\)\)", source)
+        self.assertEqual(
+            len(expressions), 2,
+            'power spectrum extent should appear exactly twice '
+            '(imshow + set_extent)',
+        )
+        extents = {
+            eval(f'({expression})', {'N': cols, 'M': rows})
+            for expression in expressions
+        }
+        self.assertEqual(len(extents), 1, 'extent expressions disagree')
+        return extents.pop()
+
+    def test_extent_places_pixel_centers_on_integer_coordinates(self):
+        """Pixel (i, j) centre must sit at data coordinates (j, i)."""
+        rows, cols = 64, 96
+        self.assertEqual(
+            self._power_extent(rows, cols),
+            (-0.5, cols - 0.5, rows - 0.5, -0.5),
+        )
+
+    def test_click_back_calculation_has_no_half_pixel_offset(self):
+        """Clicking the centre of a Bragg peak must yield its exact G."""
+        import inspect
+        import re
+
+        source = inspect.getsource(StrainGUI._on_power_click)
+        gx_expr = next(
+            line.strip().split('=', 1)[1]
+            for line in source.splitlines()
+            if re.match(r'\s*gx\s*=', line)
+        )
+        gy_expr = next(
+            line.strip().split('=', 1)[1]
+            for line in source.splitlines()
+            if re.match(r'\s*gy\s*=', line)
+        )
+
+        rows = cols = 128
+        gx_true, gy_true = 9, 6
+        row, col = rows // 2 + gy_true, cols // 2 + gx_true
+        extent = self._power_extent(rows, cols)
+        # Data coordinate of the clicked pixel centre under the extent.
+        x = extent[0] + (col + 0.5) / cols * (extent[1] - extent[0])
+        y = extent[3] + (row + 0.5) / rows * (extent[2] - extent[3])
+        gx = eval(gx_expr, {'x': x, 'N': cols})
+        gy = eval(gy_expr, {'y': y, 'M': rows})
+        self.assertEqual((gx, gy), (gx_true, gy_true))
 
 
 if __name__ == '__main__':

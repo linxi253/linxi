@@ -645,18 +645,63 @@ class _DMReader:
         return None
 
 
+def _read_preceding_label(data, found: int, version: int) -> Optional[str]:
+    """Recover the tag label preceding a ``%%%%`` delimiter, if trusted.
+
+    Every tag entry places its label immediately before the tag-data
+    delimiter: ``[0x15][label_len:u16][label][DM4: total size:u64] %%%%``.
+    A delimiter not preceded by such a well-formed structure is almost
+    certainly a ``0x25252525`` byte sequence inside binary payload data (a
+    phantom delimiter) and must not be interpreted as a tag.  Returns the
+    printable-ASCII label (``''`` for legal unnamed tags) or ``None`` when
+    the position is untrusted.
+    """
+    label_end = found - 8 if version == 4 else found
+    if label_end - 3 < 0:
+        return None
+    # 标签长度字段在标签之前（[0x15][len:2][label]），位置依赖未知的
+    # label_len，只能枚举：len 字段值 == L 且前置类型字节 0x15 同时成立。
+    for label_len in range(0, 65):
+        len_pos = label_end - label_len - 2
+        if len_pos < 1:
+            break
+        if struct.unpack('>H', data[len_pos:len_pos + 2])[0] != label_len:
+            continue
+        if data[len_pos - 1] != 0x15:
+            continue
+        raw = data[len_pos + 2:label_end]
+        if len(raw) != label_len:
+            continue
+        if any(b < 0x20 or b > 0x7E for b in raw):
+            continue
+        return raw.decode('ascii')
+    return None
+
+
 def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    Simplified DM3/DM4 reader that uses a heuristic approach to find the
-    largest 2D data array, which is typically the main image.
+    Fallback DM3/DM4 reader that walks the raw ``%%%%`` tag-data delimiters.
 
-    This is more robust than the structural parser for files with
-    non-standard or corrupted tag structures.
+    Only used when both ncempy and the structural parser reject a file (e.g.
+    non-standard or corrupted tag structures).  The scan validates the
+    tag-entry structure preceding every delimiter (type byte 0x15 plus a
+    length-prefixed printable label) so phantom ``0x25252525`` sequences
+    inside binary payload data are ignored instead of hijacking the stream.
 
-    Parameters
-    ----------
-    filepath : str
-        Path to DM file.
+    The main image block is selected from the file's own metadata, never by
+    picking the largest array:
+
+    - a block is a candidate only for a ``Data``-labelled array whose
+      declared ``Dimensions`` metadata holds exactly two positive values
+      whose product equals the array length; the returned shape comes from
+      that declaration (row-major ``(height, width)``), never from
+      factorising the element count, so 3D stacks cannot be reshaped into an
+      invented 2D shape;
+    - when several candidates survive, a ``DataType`` code from
+      ``DM_TYPE_MAP`` (real numeric image) disambiguates against
+      palette/compressed thumbnail types;
+    - if the main image is still not uniquely identified, ``DM3Error`` is
+      raised instead of silently guessing.
 
     Returns
     -------
@@ -679,16 +724,25 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
             endian = '<' if bo == 1 else '>'
             encoded_fmt, encoded_size = ('I', 4) if version == 3 else ('Q', 8)
 
-            # Store only descriptors while scanning. Candidate image arrays are
-            # copied only after the largest valid block is selected.
-            candidates = []
+            # Descriptors only while scanning; the selected block is copied
+            # after the metadata-based selection has uniquely identified it.
+            image_blocks: List[Dict[str, Any]] = []
+            pending_dims: List[int] = []
+            pending_dtype_code: Optional[int] = None
             delimiter = b'%%%%'
             idx = 0
             while idx < file_size - (4 + encoded_size * 2):
                 found = data.find(delimiter, idx)
                 if found < 0:
                     break
+                label = _read_preceding_label(data, found, version)
                 idx = found + 4
+
+                if label is None:
+                    # Phantom delimiter inside binary payload data: never
+                    # interpret the bytes that follow as an info array.
+                    idx = found + 1
+                    continue
 
                 if idx + encoded_size > file_size:
                     break
@@ -709,35 +763,113 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
                     for j in range(n_vals)
                 ]
                 idx += info_bytes
+                lowered = label.strip().lower()
 
-                if len(info_array) == 3 and info_array[0] == 20:
-                    elem_type, arr_len = info_array[1], info_array[2]
-                    if elem_type not in DM_TAG_ENCODED_TYPE_MAP or arr_len <= 100:
-                        continue
-                    dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type].newbyteorder(endian)
-                    total_bytes = int(arr_len) * dtype.itemsize
-                    if total_bytes <= 0 or idx + total_bytes > file_size:
-                        continue
-                    shape_2d = _find_2d_shape(int(arr_len))
-                    if shape_2d is not None:
-                        candidates.append(
-                            (int(arr_len), idx, dtype, shape_2d)
+                if n_vals == 1 and info_array[0] in DM_TAG_ENCODED_TYPE_MAP:
+                    # Scalar tag: Dimensions/DataType carry the metadata used
+                    # to identify and shape the main image block.
+                    scalar_dtype = DM_TAG_ENCODED_TYPE_MAP[info_array[0]]
+                    if idx + scalar_dtype.itemsize <= file_size:
+                        value = int(np.frombuffer(
+                            data,
+                            dtype=scalar_dtype.newbyteorder(endian),
+                            count=1,
+                            offset=idx,
+                        )[0])
+                        idx += scalar_dtype.itemsize
+                        if lowered == 'dimensions' and value > 0 \
+                                and len(pending_dims) < 8:
+                            pending_dims.append(value)
+                        elif lowered == 'datatype':
+                            pending_dtype_code = value
+                elif (n_vals == 3 and info_array[0] == 20
+                        and info_array[1] in DM_TAG_ENCODED_TYPE_MAP):
+                    elem_type, arr_len = info_array[1], int(info_array[2])
+                    dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type]
+                    total_bytes = arr_len * dtype.itemsize
+                    fits = arr_len > 0 and idx + total_bytes <= file_size
+                    if lowered == 'data':
+                        if arr_len > 100 and fits:
+                            image_blocks.append({
+                                'arr_len': arr_len,
+                                'offset': idx,
+                                'dtype': dtype.newbyteorder(endian),
+                                'dims': tuple(pending_dims),
+                                'dtype_code': pending_dtype_code,
+                            })
+                        if fits:
+                            idx += total_bytes
+                        pending_dims = []
+                        pending_dtype_code = None
+                    elif lowered == 'dimensions' and 1 <= arr_len <= 8 and fits:
+                        # Array-form Dimensions: {20, elem_type, n_values}.
+                        values = np.frombuffer(
+                            data,
+                            dtype=dtype.newbyteorder(endian),
+                            count=arr_len,
+                            offset=idx,
                         )
-                    idx += total_bytes
-                elif len(info_array) == 1 and info_array[0] in DM_TAG_ENCODED_TYPE_MAP:
-                    idx += DM_TAG_ENCODED_TYPE_MAP[info_array[0]].itemsize
+                        idx += total_bytes
+                        for value in values:
+                            value = int(value)
+                            if value > 0 and len(pending_dims) < 8:
+                                pending_dims.append(value)
+                    elif fits:
+                        # Any other labelled array: skip its declared payload
+                        # so the scan resumes after it instead of inside it.
+                        idx += total_bytes
 
-            if not candidates:
+            if not image_blocks:
                 raise DM3Error("No plausible 2D image data found in DM file.")
 
-            _, data_offset, dtype, shape = max(candidates, key=lambda item: item[0])
-            count = shape[0] * shape[1]
+            # Verify each candidate against the declared dimension metadata.
+            verified = []
+            for block in image_blocks:
+                dims = block['dims']
+                if len(dims) == 2 and dims[0] > 0 and dims[1] > 0 \
+                        and dims[0] * dims[1] == block['arr_len']:
+                    block['shape'] = (dims[1], dims[0])  # (height, width)
+                    verified.append(block)
+
+            if not verified:
+                for block in image_blocks:
+                    dims = block['dims']
+                    if len(dims) > 2 and 0 not in dims \
+                            and int(np.prod(dims)) == block['arr_len']:
+                        raise DM3Error(
+                            "DM file declares a "
+                            f"{len(dims)}-dimensional dataset (dimensions="
+                            f"{list(dims)}), not a 2D image; the heuristic "
+                            "fallback reader cannot reshape it without "
+                            "inventing a shape."
+                        )
+                raise DM3Error("No plausible 2D image data found in DM file.")
+
+            # DataType metadata disambiguation: a real numeric image type
+            # wins over palette/compressed thumbnail types (e.g. 23).
+            if len(verified) > 1:
+                numeric = [
+                    block for block in verified
+                    if block['dtype_code'] in DM_TYPE_MAP
+                ]
+                if len(numeric) == 1:
+                    verified = numeric
+            if len(verified) > 1:
+                raise DM3Error(
+                    f"Found {len(verified)} plausible image data blocks "
+                    f"(dims/dtype: "
+                    f"{[(block['dims'], block['dtype_code']) for block in verified]}"
+                    "); cannot identify the main image without guessing."
+                )
+
+            block = verified[0]
+            count = block['arr_len']
             largest = np.frombuffer(
                 data,
-                dtype=dtype,
+                dtype=block['dtype'],
                 count=count,
-                offset=data_offset,
-            ).astype(np.float64, copy=True).reshape(shape)
+                offset=block['offset'],
+            ).astype(np.float64, copy=True).reshape(block['shape'])
             metadata = {
                 'shape': largest.shape,
                 'reader': 'heuristic',
@@ -749,36 +881,6 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
             _extract_pixel_size_heuristic(data, endian, metadata)
 
     return largest, metadata
-
-
-def _find_2d_shape(total: int) -> Optional[Tuple[int, int]]:
-    """
-    Try to find a reasonable 2D shape for the given total element count.
-    Prefers square-ish images with common TEM sizes.
-    """
-    # Common TEM image sizes
-    common_sizes = [
-        (4096, 4096), (2048, 2048), (1024, 1024), (512, 512), (256, 256),
-        (4096, 2048), (2048, 4096), (2048, 1024), (1024, 2048),
-        (4000, 4000), (3000, 3000), (2000, 2000),
-        (1024, 768), (768, 1024), (640, 480), (480, 640),
-        (576, 576), (584, 584), (288, 288),
-    ]
-
-    for h, w in common_sizes:
-        if h * w == total:
-            return (h, w)
-
-    # Try to factorize: find factors closest to sqrt
-    sqrt_n = int(np.sqrt(total))
-    for i in range(sqrt_n, max(1, sqrt_n - 100), -1):
-        if total % i == 0:
-            j = total // i
-            # Accept if aspect ratio is reasonable (< 4:1)
-            if 0.25 < i / j < 4.0:
-                return (i, j)
-
-    return None
 
 
 def _find_dm_unit_hint(data: bytes, start: int, end: int) -> Optional[str]:

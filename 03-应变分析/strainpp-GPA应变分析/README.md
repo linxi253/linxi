@@ -69,7 +69,8 @@ strainpp-gpa image.tif --g1 30 0 --g2 0 30 --sigma1 5 --sigma2 5
   ImageJ 标定）。
 
 Windows 独立程序位于 `dist\Strain++GPA.exe`。它带有版本资源，但只有在构建时
-提供代码签名证书才会被数字签名。
+提供代码签名证书才会被数字签名。版本资源 `version_info.txt` 为手写副本、可能滞后，
+发布版本一律以 `_version.py`（单一来源，当前 1.4.1）为准。
 
 ## 图形界面工作流
 
