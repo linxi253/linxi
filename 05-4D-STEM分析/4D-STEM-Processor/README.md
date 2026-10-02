@@ -668,8 +668,8 @@ Cu 标准数据验证。
 # 1. 进入 measure 目录
 cd <数据目录>\measure
 
-# 2. 安装依赖
-pip install numpy matplotlib ncempy
+# 2. 安装依赖（版本区间以 requirements.txt 为准，勿无区间逐包安装）
+pip install -r requirements.txt
 
 # 3. 提取数据（如果尚未提取）
 python processing/extract_au_correct.py
@@ -857,7 +857,7 @@ fixed_data, info = fix_dimensions(data, method='auto')
 *文档生成时间: 2026-07-19*
 *处理版本: v3*
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
@@ -866,7 +866,7 @@ fixed_data, info = fix_dimensions(data, method='auto')
 | 项 | 内容 |
 |---|---|
 | 当前版本 | **2.2.0** |
-| 版本来源 | `stem_processor_gui.py` |
+| 版本来源 | `core/__init__.py`（`__version__`，经 `stem_processor_gui.py` 导入） |
 | 入口 | `stem_processor_gui.py` |
 | 依赖锁定 | `requirements.lock.txt` |
 | 许可证 | MIT |

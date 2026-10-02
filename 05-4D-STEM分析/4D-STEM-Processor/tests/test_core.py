@@ -274,31 +274,42 @@ def test_ssb_reconstruct_runs_and_saves_shapes():
 def test_ssb_recovers_synthetic_phase():
     # End-to-end accuracy lock: SSB must recover the phase of the synthetic
     # forward model in core.ssb_core (crude Gaussian-probe kinematics, so the
-    # absolute correlation ceiling is limited; ~0.50 is the deterministic
-    # baseline for this configuration). Guards against sign flips, mirroring
-    # and gross regressions such as a reintroduced aperture wrap-around.
+    # absolute correlation ceiling is limited). Guards against sign flips,
+    # mirroring and gross regressions such as a reintroduced aperture
+    # wrap-around.
+    #
+    # Geometry: generate_4dstem_fast fftshifts every diffraction pattern so
+    # the DC (beam centre) sits at the array centre — the same point the
+    # `center` argument below assumes. The reconstruction returns the
+    # conjugate (sign-flipped) phase of this toy forward model, so the ground
+    # truth enters the correlation negated. With the fftshift reverted (DC at
+    # [0,0], beam centre off `center`) the correlation collapses or flips sign
+    # and both assertions below fail; the second, narrower-aperture
+    # configuration concentrates the diffraction spectrum around the DC and
+    # is the more beam-centre-sensitive of the two (pre-fix corr ~ -0.25 vs
+    # post-fix ~ +0.63 in the negated convention).
     from core.ssb_core import generate_4dstem_fast
-
-    scan, det, alpha = 24, 48, 8
-    datacube, obj, _ = generate_4dstem_fast((scan, scan), (det, det), alpha,
-                                            defocus_rad=0.0)
-    center = (det / 2.0, det / 2.0)
-    result = ssb_reconstruct(datacube, alpha_pixels=alpha, center=center,
-                             verbose=False)
-    assert result['cancelled'] is False
-
-    rec_phase = np.angle(result['complex_obj'])
-    true_phase = np.angle(obj)
 
     def corr(a, b):
         a = a.ravel() - a.mean()
         b = b.ravel() - b.mean()
         return float(a @ b / np.sqrt((a @ a) * (b @ b)))
 
-    c_direct = corr(rec_phase, true_phase)
-    c_flipped = corr(rec_phase, np.flip(true_phase))
-    assert c_direct > 0.3
-    assert c_direct > c_flipped
+    for scan, det, alpha, floor in ((24, 48, 8, 0.3), (24, 48, 4, 0.4)):
+        datacube, obj, _ = generate_4dstem_fast((scan, scan), (det, det), alpha,
+                                                defocus_rad=0.0)
+        center = (det / 2.0, det / 2.0)
+        result = ssb_reconstruct(datacube, alpha_pixels=alpha, center=center,
+                                 verbose=False)
+        assert result['cancelled'] is False
+
+        rec_phase = np.angle(result['complex_obj'])
+        true_phase = -np.angle(obj)  # conjugate-convention ground truth
+
+        c_direct = corr(rec_phase, true_phase)
+        c_flipped = corr(rec_phase, np.flip(true_phase))
+        assert c_direct > floor, (scan, det, alpha, c_direct)
+        assert c_direct > c_flipped, (scan, det, alpha, c_direct, c_flipped)
 
 
 def test_ssb_cancellation():

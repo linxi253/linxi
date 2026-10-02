@@ -171,8 +171,12 @@ def generate_4dstem_fast(scan_shape, det_shape, alpha_pixels, defocus_rad=0.0):
             # Exit wave
             exit_wave = probe_shifted * obj
             
-            # Diffraction pattern
-            exit_k = fft2(exit_wave)
+            # Diffraction pattern. fftshift moves the DC (unscattered beam
+            # centre) to the array centre so that the centre-based crop/pad
+            # below and the aperture geometry in ssb_reconstruct (which place
+            # the BF disk at `center`) refer to the same point; probe_k above
+            # already follows this convention.
+            exit_k = fftshift(fft2(exit_wave))
             
             # Crop to detector size from center
             # If det > scan, pad; if det < scan, crop

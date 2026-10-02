@@ -580,7 +580,7 @@ class STEMProcessorApp:
         try:
             os.makedirs(output_dir, exist_ok=True)
             probe = os.path.join(output_dir, '.write_probe')
-            with open(probe, 'w') as fp:
+            with open(probe, 'w', encoding='utf-8') as fp:
                 fp.write('ok')
             os.remove(probe)
         except OSError as exc:

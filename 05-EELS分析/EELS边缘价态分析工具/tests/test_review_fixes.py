@@ -46,6 +46,8 @@ def _base_config(tmp_path: Path, **overrides) -> AnalysisConfig:
         "input_path": source,
         "output_dir": tmp_path / "output",
         "references": references,
+        # 与样品/预设绑定的参数不再有数值默认，测试显式给一个中性值。
+        "along_surface_segment_nm": 5.0,
     }
     kwargs.update(overrides)
     return AnalysisConfig(**kwargs)

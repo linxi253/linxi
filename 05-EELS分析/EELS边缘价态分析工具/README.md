@@ -181,7 +181,7 @@ Windows 发行版：
 - 性能：敏感性分析仅对 E1 及边界邻域像素执行去卷积（大型 SI 下每次去卷积
   约 16 倍加速），原始文件哈希校验由 4 次全量读取降为 2 次（stat 快路径）。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

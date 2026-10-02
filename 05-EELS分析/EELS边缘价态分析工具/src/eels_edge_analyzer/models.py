@@ -55,15 +55,15 @@ class ReferenceSpec:
 
 
 def default_distance_bins() -> tuple[DistanceBin, ...]:
-    """默认的 0–2.2–4.4–6.6–11 nm 表层到内部剖面。"""
+    """代码默认只给单一内部层（不预设任何表层剖分）。
 
-    return (
-        DistanceBin("E1", 0.0, 2.2),
-        DistanceBin("E2", 2.2, 4.4),
-        DistanceBin("E3", 4.4, 6.6),
-        DistanceBin("E4", 6.6, 11.0),
-        DistanceBin("Bulk", 11.0, None),
-    )
+    元素/样品专属的表层到内部距离分层（例如 Cu L2,3 的
+    0–2.2–4.4–6.6–11 nm 剖面）由内置预设 presets/cu_l23.json 提供，
+    不再作为全局默认值——否则换元素/换样品而不改配置时会静默套用
+    与当前样品无关的表面深度分层。
+    """
+
+    return (DistanceBin("Bulk", 0.0, None),)
 
 
 def _check_ordered_pair(values: tuple[float, float], name: str) -> None:
@@ -132,7 +132,8 @@ class AnalysisConfig:
         0.90,
     )
     injection_residual_block_channels: int = 5
-    along_surface_segment_nm: float = 11.0
+    # 与样品/预设绑定，不设数值默认：Cu L2,3 预设提供 11.0 nm。
+    along_surface_segment_nm: float | None = None
 
     qc_min_r2: float = 0.50
     qc_min_snr: float = 3.0
@@ -193,6 +194,11 @@ class AnalysisConfig:
             raise ValueError("表面搜索深度至少为 2 个像素。")
         if self.surface_orientation not in {"auto", "top", "bottom", "left", "right"}:
             raise ValueError(f"未知样品表面方向: {self.surface_orientation}")
+        if self.along_surface_segment_nm is None:
+            raise ValueError(
+                "沿表面分段宽度必须显式提供（nm）：请使用参数预设"
+                "（内置 Cu L2,3 预设为 11.0）或经 CLI/GUI 显式设置，"
+                "该值与样品/预设的距离分层绑定，不设全局默认。")
         if self.along_surface_segment_nm <= 0:
             raise ValueError("沿表面分段宽度必须为正。")
         if self.injection_simulations < 0:

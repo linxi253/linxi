@@ -31,6 +31,7 @@ _VALUE_FIELDS: dict[str, str] = {
     "background_max_ev": "background_max_ev",
     "smoothing_ev": "smoothing_ev",
     "regularization": "deconvolution_regularization",
+    "along_surface_segment_nm": "along_surface_segment_nm",
 }
 
 # 从 --config 复跑时排除的字段（由输入/输出/参考谱参数单独解析）。
@@ -75,6 +76,11 @@ def _parser() -> argparse.ArgumentParser:
         "--distance-bins",
         type=str,
         help='距离分层，如 "E1:0:2.2,E2:2.2:4.4,Bulk:11"（末层省略上限即开区间）',
+    )
+    parser.add_argument(
+        "--along-surface-segment-nm",
+        type=float,
+        help="沿表面分段宽度 (nm)；Cu L2,3 内置预设为 11.0，--no-preset 时必须显式提供",
     )
     parser.add_argument("--orientation", choices=("auto", "top", "bottom", "left", "right"), default=None)
     parser.add_argument("--survey-dataset", type=int)
