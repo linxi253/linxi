@@ -337,9 +337,11 @@ def probe_video(
     stream_items = payload.get("streams", [])
     if not isinstance(stream_items, list):
         raise FFmpegError(f"ffprobe 返回的视频流结构无效: {path.name}")
+    # 无条件收集全部可用流（只剔除封面图流），让 stream_count 反映真实
+    # 可用视频流总数供多流告警使用；解码仍固定用首选流（第一个非封面流）。
     streams = []
     video_ordinal = 0
-    chosen_ordinal = 0
+    chosen_ordinal: int | None = None
     for item in stream_items:
         if not isinstance(item, dict) or item.get("codec_type") != "video":
             continue
@@ -347,11 +349,12 @@ def probe_video(
         disposition = item.get("disposition")
         if isinstance(disposition, dict) and disposition.get("attached_pic"):
             is_attached = True
-        if not streams and not is_attached:
+        if not is_attached:
             streams.append(item)
-            chosen_ordinal = video_ordinal
+            if chosen_ordinal is None:
+                chosen_ordinal = video_ordinal
         video_ordinal += 1
-    if not streams:
+    if chosen_ordinal is None or not streams:
         raise FFmpegError(f"未找到可用的视频流: {path.name}")
     stream = streams[0]
     try:

@@ -42,6 +42,23 @@ def test_small_stack_uses_classic_imagej_tiff_and_records_time_axis(tmp_path: Pa
         assert ij["fps"] == pytest.approx(4.0)
 
 
+def test_zero_interval_writes_no_fixed_time_axis(tmp_path: Path) -> None:
+    """interval_s <= 0（如恰好 2 帧且 PTS 相同）不得写入 finterval/fps：
+    写 fps 需做 1.0/interval 除法，零间隔会让任务以 ZeroDivisionError 失败。"""
+    spec = FrameSpec(4, 4, 1, "uint8", "gray", "gray")
+    out = tmp_path / "zero_interval.tif"
+    writer = StackWriter(out, spec, 2, 0.0)
+    writer.open()
+    writer.write(0, np.zeros(spec.shape, dtype=np.uint8))
+    writer.write(1, np.zeros(spec.shape, dtype=np.uint8))
+    writer.close(2)
+
+    with tifffile.TiffFile(out) as tif:
+        metadata = tif.imagej_metadata or {}
+    assert "finterval" not in metadata
+    assert "fps" not in metadata
+
+
 def test_rgb_stack_uses_rgb_photometric(tmp_path: Path) -> None:
     spec = FrameSpec(5, 4, 3, "uint8", "rgb24", "rgb")
     out = tmp_path / "rgb.tif"

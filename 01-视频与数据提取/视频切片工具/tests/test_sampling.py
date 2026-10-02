@@ -88,3 +88,13 @@ def test_median_interval_returns_typical_delta() -> None:
     assert median_interval([0.0, 0.1, 0.2, 0.3]) == pytest.approx(0.1)
     assert median_interval([0.0]) is None
     assert median_interval([]) is None
+
+
+def test_two_frames_with_identical_pts_yield_zero_interval() -> None:
+    """工单 77 触发链：恰好 2 帧且 PTS 相同（重复帧/单帧循环容器）时，
+    timeline_is_uniform 对少于 3 帧判均匀、median 间隔为 0——runner 必须把
+    该非正间隔当作时间轴不可用回退 None，而不是写入 interval=0。"""
+    from video_extractor.sampling import median_interval, timeline_is_uniform
+
+    assert timeline_is_uniform([0.0, 0.0]) is True
+    assert median_interval([0.0, 0.0]) == 0.0

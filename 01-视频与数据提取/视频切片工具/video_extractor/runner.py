@@ -525,13 +525,20 @@ class JobRunner:
                 scheduled_times = [value - source_pts[0] for value in source_pts]
                 csv_source_pts = [value + format_offset for value in source_pts]
                 measured_interval = median_interval(source_pts)
-                if timeline_is_uniform(source_pts):
+                if (
+                    timeline_is_uniform(source_pts)
+                    and measured_interval is not None
+                    and measured_interval > 0
+                ):
                     interval: float | None = measured_interval
                 else:
+                    # timeline_is_uniform 对少于 3 帧恒判均匀，两帧 PTS 相同
+                    # （重复帧/单帧循环容器）时 median 间隔为 0：时间轴不可用，
+                    # 与可变帧率一致地不写固定帧间隔，避免写 TIFF 元数据时除零
                     interval = None
                     warn(
-                        f"{video.name} 实测帧间隔不均匀（可变帧率）：TIFF 不写入固定帧间隔，"
-                        "逐帧精确时间见 CSV 的 source_pts_s 列"
+                        f"{video.name} 实测帧间隔不均匀或退化（可变帧率/重复 PTS）："
+                        "TIFF 不写入固定帧间隔，逐帧精确时间见 CSV 的 source_pts_s 列"
                     )
             elif self.options.sampling.mode is SamplingMode.ALL:
                 # PTS 捕获不可用：回退为按平均帧率估算并明确标记
