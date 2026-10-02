@@ -10,8 +10,8 @@ class TestAppConfig:
         monkeypatch.setattr(app_config, '_config_path', lambda: str(cfg_file))
 
         data = {
-            'input_folder': r'H:\data',
-            'output_folder': r'H:\out',
+            'input_folder': str(tmp_path / 'data'),
+            'output_folder': str(tmp_path / 'out'),
             'pixel_size': 0.5,
             'pixel_calibrated': True,
             'segmentation': {'method': 'otsu', 'threshold': 100},

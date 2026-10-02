@@ -70,7 +70,7 @@ FOREGROUND_OPTIONS = {
 # ==================== 图像显示 ====================
 # uint16 -> uint8 的缩放不再使用固定 /256：12-bit 相机数据（0-4095）会被
 # 压到 0-15，固定阈值与 Otsu 全部失效。现按数据实际量程选择右移位数
-# （0/4/8 位），见 core.segmentation.uint16_to_uint8。
+# （0/4/6/8 位），见 core.segmentation.uint16_to_uint8。
 MIN_REGION_PIXELS = 3             # 连通区域计入"区域数量"的最小像素数（与轮廓统计同口径）
 MAX_ZOOM = 5.0
 MIN_ZOOM = 0.05

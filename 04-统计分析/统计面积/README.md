@@ -109,7 +109,9 @@ python -m pytest tests -q
 - `requirements.txt`：运行依赖。
 - `统计面积v2.spec`：PyInstaller 配置。
 - `dist/TIFF面积测量工具v2.exe`：已打包程序（构建产物，未随仓库分发）。
-- `面积统计.txt`：较早的代码/说明文本副本，仅作历史备份。
+
+（曾以 `面积统计.txt` 形式入库的重构前源码快照已删除：它与现行 `统计面积.py`
+同名类已分叉且不受静态检查覆盖，历史版本可在 git 历史中查看，勿再作为现行实现参考。）
 
 ## 注意事项
 
@@ -125,7 +127,7 @@ python -m pytest tests -q
 - 渲染等内部错误会写入程序同目录的 `测量工具.log`（2 MB 轮转 × 3 个备份）
   并对用户节流弹窗提示。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

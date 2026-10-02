@@ -77,7 +77,7 @@ python -m pytest tests/ -q
 - 趋势 p 值未校正时间自相关，应视为描述性指标。
 - 强度 95% CI（z·σ/√N_eff）是区域空间均值的代表性区间：混合了原子柱间真实物理不均匀性与测量噪声，未传播 I₀ 估计误差，且阈值选择对均值存在向高值的偏置。不要将其当作单帧测量噪声的置信区间做显著性比较。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

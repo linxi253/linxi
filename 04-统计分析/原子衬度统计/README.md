@@ -155,7 +155,7 @@ python .\smoke_test_gui.py
 - 无压缩 TIFF 在加载期间保持内存映射，会持续占用文件句柄（Windows 下该文件在程序中打开期间无法被移动/删除）。
 - 3D 数据 axes 含 Z（层析/系列切片堆栈）时会按"帧序"处理并在日志提示；若切片间不是时间演化关系，请谨慎解读跨帧统计。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
