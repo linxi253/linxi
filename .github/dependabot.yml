@@ -1,0 +1,8 @@
+# 审计工单 95 的配套：actions 已按 commit SHA 固定（见 workflows/ci.yml），
+# 依赖 Dependabot 自动跟踪上游版本并开 PR 更新 SHA 引用。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

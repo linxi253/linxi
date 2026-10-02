@@ -10,10 +10,18 @@ Checks
 3. Every project venv is genuinely isolated
    (``include-system-site-packages = false``) and its interpreter runs.
 4. No launcher/build script falls back to a bare ``python`` from PATH.
+5. Every auto-generated lock (carrying the 「自动生成」 header) still matches
+   at least one project venv's exact ``pip freeze``.
+6. The user-level ``pip.ini`` is ASCII-only and still parses under pip.
+
+审计 123：默认模式下，「锁文件在场但 venv 尚未建立」（no venv）只降级为
+info——新克隆/未建环境的工作区上这是预期初始状态，不是隔离约定被破坏；
+传 ``--strict`` 恢复严格行为（no venv 也计为违规）。缺 lock file、
+venv 泄漏系统 site-packages、解释器损坏等仍一律 FAIL。
 
 Usage::
 
-    python <仓库根>\\.tools\\check-env-isolation.py
+    python <仓库根>\\.tools\\check-env-isolation.py [--strict]
 
 Exit code 0 = clean, 1 = violations found.
 """
@@ -22,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +73,9 @@ SKIP_DIR_PARTS = {
     "08-历史版本", "site-packages", "node_modules", "__pycache__", "build",
     "dist", "runs", "legacy", "release", "_internal", ".runtime", ".tools",
     ".venv", ".venv-build", ".venv-run", ".review-tmp", "07-文档资料",
+    # 审计 88：零散演示脚本目录——无 requirements*.txt / pyproject.toml，不构成
+    # 受管项目（find_projects 本也不会发现它），依赖由使用者按其 README 自建
+    # venv 安装。在此显式写明跳过理由，而不是让它在 SKIP 集合里沉默。
     "06-独立脚本",
 }
 SCRIPT_SUFFIXES = (".bat", ".cmd", ".ps1")
@@ -178,7 +190,7 @@ def find_projects() -> list[Path]:
     return sorted(set(found))
 
 
-def check_projects() -> None:
+def check_projects(strict: bool = False) -> None:
     print("\n[2] Project environments")
     deferred = {**DEFERRED, **load_deferred_extra()}
     for proj in find_projects():
@@ -196,14 +208,32 @@ def check_projects() -> None:
                   "no venv, no requirements/ lock) - no env expected")
             continue
 
-        locks = [p for p in proj.iterdir()
-                 if p.is_file() and "lock" in p.name.lower()
-                 and p.suffix in (".txt", ".lock")]
+        def _is_lock_candidate(p):
+            try:
+                return p.is_file() and "lock" in p.name.lower() \
+                    and p.suffix in (".txt", ".lock")
+            except OSError:
+                # Windows 保留设备名（如误生成的 `nul`）stat 会抛 WinError 1；
+                # 跳过该条目而不是让整个自检崩溃（审计工单 109 机制）
+                return False
+
+        locks = [p for p in proj.iterdir() if _is_lock_candidate(p)]
         locks += sub_locks
 
-        issues = []
         if not venvs:
-            issues.append("no venv")
+            # 审计 123：锁文件在场而 venv 缺席 = 「环境尚未建立」而非「隔离
+            # 约定被破坏」——新克隆的工作区上这是必然的初始状态（实测满屏
+            # no venv 且 exit 1），默认降级为 info，不计入违规；--strict
+            # 恢复严格口径。连锁文件都没有则仍是 FAIL（声明了依赖却无锁）。
+            if locks and not strict:
+                print(f"    info  {rel}: no venv yet - environment not "
+                      "provisioned on this clone (expected on a fresh "
+                      "checkout; provision with .tools/provision-envs.py, "
+                      "or pass --strict to enforce)")
+                continue
+            issues = ["no venv"]
+        else:
+            issues = []
         if not locks:
             issues.append("no lock file")
         if issues:
@@ -407,11 +437,20 @@ def check_lock_fidelity() -> None:
         print("    info  no auto-generated locks found")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    strict = "--strict" in args
+    unknown = [a for a in args if a != "--strict"]
+    if unknown:
+        print(f"unknown arguments: {' '.join(unknown)} "
+              "(supported: --strict)")
+        return 2
+    mode = "strict" if strict else "default (missing venvs are info, 审计 123)"
     print(f"workspace : {ROOT}")
+    print(f"mode      : {mode}")
     print("=" * 74)
     check_base()
-    check_projects()
+    check_projects(strict)
     check_scripts()
     check_pth()
     check_lock_fidelity()

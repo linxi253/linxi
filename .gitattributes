@@ -1,0 +1,7 @@
+# 统一行尾策略（工单 103）：文本文件入库统一 LF，由 Git 自动规范化；
+# Windows 脚本检出为 CRLF（cmd.exe 对 LF-only 的 goto/label 处理不可靠，
+# PowerShell 5.1 的控制台宿主同样按 CRLF 语义最稳）。
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

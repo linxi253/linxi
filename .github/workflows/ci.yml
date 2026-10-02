@@ -17,17 +17,26 @@ jobs:
     name: lint & compile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # 审计条目 95：第三方 action 一律按 commit SHA 固定（配 Dependabot 更新），
+      # 上游移动标签不再能改写 CI 行为。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 
       - name: Install ruff
-        run: python -m pip install --upgrade pip ruff
+        # 审计条目 98：ruff 按精确版本固定（0.16.10，2026-10-02 PyPI/清华镜像
+        # 实测最新），避免上游发版悄然改变 lint 结果；pip 本身保持升级。
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff==0.16.10
 
       - name: Ruff lint
-        # 只挑「真错误」：E9 语法/运行时、F63 无效 __all__、F7 类型注释语法、F82 未定义名。
+        # 只挑「真错误」：E9 语法/运行时；F63 值比较/断言类错误（F631 对非空
+        # 元组断言、F632 与 str/bytes/int 字面量做 is 比较、F633 Py2 风格
+        # `print >>` 语句——审计工单 132 更正：与 __all__ 无关，__all__ 相关
+        # 的未定义名属 F822）；F7 类型注释语法；F82 未定义名。
         # 不跑 ruff 默认全量规则集：19 条矩阵腿中仅 5 个的 pyproject.toml 带
         # [tool.ruff] 配置（drift-correction-v7、hrtem-HRTEM滤波工具、stem-optimize、
         # EELS边缘价态分析、全整合），其余 14 个没有——全量规则下这些项目会按 ruff
@@ -35,12 +44,28 @@ jobs:
         # 第一步就全部卡红。
         #
         # 注意：ruff 会把 `x=1;match=y` 误判为 E999（把 match 当软关键字语句），这是 ruff
-        # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法。真语法错误由下面的
-        # compileall（CPython 解析器）兜底。
+        # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法——因此不以 ruff 的
+        # E999 为准。它并不会「兜底」ruff 的结果（审计工单 98 更正：compileall 是
+        # 与本步骤互不读取输出的独立后续步骤），但真正的语法错误仍会在那条独立
+        # 步骤里被 CPython 解析器捕获，不会漏过 CI。
         run: ruff check --select E9,F63,F7,F82 --output-format=github .
 
       - name: Compile all sources
-        run: python -m compileall -q -x '(^|/)(\.venv|build|dist|release|legacy|wheelhouse)/' .
+        # 审计条目 97：排除集与根 .gitignore 的目录类规则对齐（venv 系/build 系/
+        # dist 系/release/wheelhouse/legacy/运行期输出目录/*egg-info/__pycache__），
+        # 并用 [/\\] 同时兼容 CI 的 POSIX 分隔符与本地 Windows 手跑时的反斜杠
+        # （旧模式写死 `/`，在 Windows 上排除完全失效）。
+        run: >-
+          python -m compileall -q -x
+          '(^|[/\\])(\.venv[^/\\]*|venv|env|build(-[^/\\]*)?|dist(-[^/\\]*)?|release|wheelhouse|legacy|outputs?|results|runs|[^/\\]*\.egg-info|__pycache__)([/\\]|$)'
+          .
+
+      # 审计工单 127：CI 矩阵与 .tools 脚本的项目清单收敛为单一来源——纯文本
+      # 比对 ci.yml 的 test 矩阵与 .tools/verify-envs.py 的 JOBS（要求集合相等）
+      # 及 .tools/provision-envs.py 的 JOBS（要求矩阵为其子集）。不做任何
+      # venv/子进程操作，秒级完成；任一侧清单漂移时此处变红。
+      - name: Guard ci.yml matrix <-> .tools project lists
+        run: python .tools/verify-envs.py --check-matrix .github/workflows/ci.yml
 
   # ---------------------------------------------------------------------------
   # 逐子项目测试。跑在 Windows 上：这些工具是 Windows 桌面 GUI 程序，测试套件
@@ -81,7 +106,7 @@ jobs:
           - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
           - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
           - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
-          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计/pythonProject' }
+          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计' }
           - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor' }
           - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具' }
           - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟' }
@@ -91,9 +116,9 @@ jobs:
           - { name: '全整合 TEM Suite',    dir: '全整合', test: 'python tests/smoke_test.py' }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (审计 95)
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           # 审计条目 46：默认统一到 3.10。矩阵内除「视频切片工具」（requires-python
           # >=3.11，上方显式 py: '3.12'）外，其余锁文件头部均标注按 Python 3.10
@@ -222,7 +247,9 @@ jobs:
           # runner.temp 是 D:\a\_temp，各段都短于 8 字符，不会产生短名别名。
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: ${{ matrix.test || 'python -m pytest -q' }}
+        # -rs 让 skip 原因出现在 CI 输出里（工单 94：GUI 测试按环境条件跳过时
+        # 必须能看出跳过了什么，而不是只看到计数）
+        run: ${{ matrix.test || 'python -m pytest -q -rs' }}
 
   # ---------------------------------------------------------------------------
   # 引擎同步守门（审计条目 15 轻量路线）：09-HRTEM模拟/tem_sim 与
@@ -235,9 +262,9 @@ jobs:
     name: engine sync (tem_sim vs stem_sim)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (审计 95)
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 

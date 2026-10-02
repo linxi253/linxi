@@ -56,10 +56,30 @@ FALLBACK_INDEX = "https://pypi.org/simple"
 BOOTSTRAP = {"pip", "setuptools", "wheel"}
 
 # name, project dir, venv, install source, lock output, verify imports
+# 审计 89/127：本清单覆盖仓库内全部带依赖声明的实存项目（此前漏列 5 个，
+# 其中 3 个带 pytest 测试；另 5 条指向不存在的「开发中\*」目录，已删除）。
+# ci.yml 的 test 矩阵（19 项）是其测试子集：矩阵中每个 dir 都必须出现在
+# 这里，由 .tools/verify-envs.py --check-matrix 在 CI 守门。本机特有的
+# 内部项目仍走 AIFORTEM_PROVISION_EXTRA（见下），不入公开清单。
 JOBS = [
+    # 视频切片工具 requires-python = ">=3.11,<3.14"（其 pyproject）：base 母本
+    # 低于 3.11 时该 job 在 MIN_BASE_PY 检查处明确 FAIL 并说明原因，而不是
+    # 用 3.10 母本建出违反项目声明的 venv（审计 89「须连同母本策略一并处理」）。
+    ("视频切片工具", r"01-视频与数据提取\视频切片工具", ".venv",
+     "requirements.txt", None,
+     ["numpy", "tifffile", "imageio_ffmpeg"]),
     ("hrtem-HRTEM滤波工具", r"02-图像处理\hrtem-HRTEM滤波工具", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "scipy", "tifffile", "imagecodecs", "matplotlib"]),
+    ("drift-correction-v7", r"02-图像处理\drift-correction-v7", ".venv",
+     "requirements.lock", None,
+     ["numpy", "cv2", "matplotlib", "tifffile", "tkinterdnd2"]),
+    ("stem-optimize-STEM图像优化", r"02-图像处理\stem-optimize-STEM图像优化", ".venv",
+     "requirements.txt", None,
+     ["numpy", "scipy", "cv2", "tifffile", "defusedxml", "imagecodecs"]),
+    ("离域效应去除工具", r"02-图像处理\离域效应去除工具", ".venv",
+     "requirements.txt", None,
+     ["numpy", "scipy", "matplotlib", "tifffile", "PIL", "imagecodecs"]),
     ("图像加滤镜工具", r"02-图像处理\图像加滤镜工具", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "scipy", "PIL", "tifffile", "imagecodecs"]),
@@ -72,6 +92,11 @@ JOBS = [
     ("原子识别纯算法", r"03-应变分析\原子识别纯算法", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "scipy", "matplotlib", "tifffile", "PIL"]),
+    # pyproject-only 项目（无 requirements*.txt）：source 用特殊值 "pyproject"，
+    # provision() 走 `pip install -e .`（与 ci.yml 矩阵的 editable 口径一致）。
+    ("原子中心识别模型开发", r"03-应变分析\原子中心识别模型开发", ".venv",
+     "pyproject", None,
+     ["numpy", "yaml", "PIL", "scipy", "tifffile", "matplotlib"]),
     ("特征区域演化分析", r"04-统计分析\特征区域演化分析", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "scipy", "matplotlib", "tifffile", "seaborn", "skimage"]),
@@ -81,7 +106,7 @@ JOBS = [
     ("原子衬度统计", r"04-统计分析\原子衬度统计", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "matplotlib", "tifffile", "ttkbootstrap", "PIL"]),
-    ("非晶面积统计", r"04-统计分析\非晶面积统计\pythonProject", ".venv",
+    ("非晶面积统计", r"04-统计分析\非晶面积统计", ".venv",
      "requirements.txt", "requirements.lock.txt",
      ["cv2", "numpy", "scipy", "tifffile", "PIL", "pandas", "openpyxl",
       "ttkbootstrap"]),
@@ -111,6 +136,14 @@ JOBS = [
      "requirements.txt", "requirements.lock.txt",
      ["numpy", "cv2", "tifffile", "matplotlib"]),
 ]
+
+# 个别 job 对母本解释器的额外下限（审计 89）：多数项目锁按 Python 3.10.9
+# 生成（母本下限因此保持 3.10），但视频切片工具 requires-python >=3.11，
+# 低版本母本建出的 venv 违反其声明。base 不满足时对应 job 明确 FAIL 并
+# 给出处理办法，绝不静默建出坏环境。
+MIN_BASE_PY = {
+    r"01-视频与数据提取\视频切片工具": (3, 11),
+}
 
 # 本机特有的内部/在研项目不写入本公开脚本：需要时把与 JOBS 同构的条目写入一个
 # 本地 JSON 文件（数组，每项为 [name, dir, venv, source, lock_out, [verify
@@ -258,6 +291,18 @@ def pip_install(py: Path, req: Path, cwd: Path) -> tuple[bool, str]:
     return False, (r.stdout or "")[-1500:]
 
 
+def pip_install_project(py: Path, proj: Path) -> tuple[bool, str]:
+    """Editable-install a pyproject-only project (审计 89：原子中心识别模型开发，
+    无 requirements*.txt，与 ci.yml 矩阵的 editable 安装同口径）。"""
+    base = [str(py), "-X", "utf8", "-m", "pip", "install",
+            "--disable-pip-version-check", "--no-input", "-q"]
+    for index in (MIRROR, FALLBACK_INDEX):
+        r = run(base + ["-i", index, "-e", "."], cwd=proj)
+        if r.returncode == 0:
+            return True, ""
+    return False, (r.stdout or "")[-1500:]
+
+
 def freeze(py: Path) -> list[str]:
     r = run([str(py), "-m", "pip", "freeze"])
     lines = []
@@ -301,10 +346,25 @@ def provision(job, base_py: Path) -> dict:
             result["detail"] = "project dir missing"
             return result
 
-        src = proj / source
-        if not src.is_file():
-            result["detail"] = f"missing {source}"
-            return result
+        # 审计 89：个别项目对母本解释器有更高下限（见 MIN_BASE_PY），
+        # 不满足时明确失败并给出处理办法
+        need = MIN_BASE_PY.get(rel)
+        if need is not None:
+            have = _interpreter_version(base_py)
+            if have is None or have < need:
+                got = "unreadable" if have is None else f"{have[0]}.{have[1]}"
+                result["detail"] = (
+                    f"requires base Python >= {need[0]}.{need[1]}, got {got}; "
+                    f"set {BASE_PY_ENV_VAR} to a newer interpreter and rerun")
+                return result
+
+        if source != "pyproject":
+            src = proj / source
+            if not src.is_file():
+                result["detail"] = f"missing {source}"
+                return result
+        else:
+            src = None
 
         # 1. venv
         if not py.is_file():
@@ -316,24 +376,29 @@ def provision(job, base_py: Path) -> dict:
             result["detail"] = "venv python missing after creation"
             return result
 
-        # 2. install (ASCII temp requirements to dodge GBK/UTF-8 issues)
-        specs = flatten(src)
-        if not specs:
-            result["detail"] = "no requirements parsed"
-            return result
-        with tempfile.NamedTemporaryFile(
-                "w", suffix=".txt", delete=False, encoding="ascii") as fh:
-            fh.write("\n".join(specs) + "\n")
-            tmp = Path(fh.name)
-        try:
-            ok, err = pip_install(py, tmp, proj)
-        finally:
-            # 兼容老解释器（<3.8）的写法：missing_ok 关键字在旧版会 TypeError，
-            # 导致所有 job 必然 FAIL。
+        # 2. install (ASCII temp requirements to dodge GBK/UTF-8 issues;
+        # pyproject-only projects are installed editable instead)
+        if source == "pyproject":
+            ok, err = pip_install_project(py, proj)
+            specs = ["-e ."]
+        else:
+            specs = flatten(src)
+            if not specs:
+                result["detail"] = "no requirements parsed"
+                return result
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".txt", delete=False, encoding="ascii") as fh:
+                fh.write("\n".join(specs) + "\n")
+                tmp = Path(fh.name)
             try:
-                tmp.unlink()
-            except FileNotFoundError:
-                pass
+                ok, err = pip_install(py, tmp, proj)
+            finally:
+                # 兼容老解释器（<3.8）的写法：missing_ok 关键字在旧版会 TypeError，
+                # 导致所有 job 必然 FAIL。
+                try:
+                    tmp.unlink()
+                except FileNotFoundError:
+                    pass
         if not ok:
             result["detail"] = "pip install failed: " + err
             return result
