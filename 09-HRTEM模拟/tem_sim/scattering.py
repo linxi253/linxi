@@ -23,9 +23,11 @@ abTEM 仓库 peng_high.json，98 元素。注意 abTEM 原文件的自变量为 
 
     φ_atom(ρ) = γλ · Σ_i (π a_i / b_i) · exp(-π² ρ² / b_i)
 
-离散化时对每个像素做解析积分（误差函数形式），保证 ∫K = γλ·a_i：
+离散化时对每个像素做解析积分（误差函数形式）并除以像素面积，即核取
+连续相位在像素上的平均值（采样值），保证 ∫K·dA = γλ·a_i：
 
-    K_i[m,n] = (γλ a_i / 4) · Δerf_x · Δerf_y,
+    ∫_pixel φ dA = (γλ a_i / 4) · Δerf_x · Δerf_y
+    K_i[m,n] = ∫_pixel φ dA / (sx·sy)
     Δerf_x = erf(π x_{n+½}/√b_i) − erf(π x_{n−½}/√b_i)
 """
 
@@ -190,9 +192,23 @@ def phase_kernels(
 ) -> List[np.ndarray]:
     """构造元素的高斯相位核列表（用于 Multislice 切片相位累加）。
 
-    每个核对应一个高斯项，像素值为相位在像素面积上的解析积分：
-        K_i[m,n] = (γλ a_i / 4) · Δerf_x · Δerf_y
-    该形式对任意采样间隔都保证 ∫K = γλ·a_i（总相位权重精确）。
+    每个核对应一个高斯项，像素取**连续投影势相位在该像素上的平均值**：
+
+        ∫_pixel φ dA = (γλ a_i / 4) · Δerf_x · Δerf_y
+        K_i[m,n] = ∫_pixel φ dA / (sx·sy)
+
+    除以像素面积这一步是关键：透射函数 t = exp(iφ) 需要的是连续相位在
+    像素中心的采样值，而 Δerf 乘积是像素内的**积分**。若把积分当相位用，
+    相位会小 Δx·Δy 倍（0.1 Å/px 下小 100 倍），透射函数的调制几乎消失、
+    高角散射强度低 4 个量级——而且所有"求和类"检验（∫K = γλa、
+    平均内电位 V0、归一化图像的 NCC）都**无法**发现这个错误，
+    因为它们只依赖积分的和。本实现曾存在该问题，2026-10 已修复，
+    与 010-STEM模拟 的 stem_sim 保持一致（见 README「相位标度修正」）。
+
+    修正后 Σ_pixels K = γλ·a_i/(sx·sy)，即采样相位的正确求和；
+    像素取得足够细时 max(K) 收敛到解析峰值 γλ·π·Σ(a_i/b_i)
+    ——对单个 Au 原子为 3.47 rad（≈π，与"重原子中心透射函数近 −1"
+    的教科书结论一致），验证见 tests/verify_physics.py 相位标度项。
 
     截断半径取 r_rel 与 r_abs 中较小者：
       - 相对阈值：exp(-π²r²/b) < exp(-cutoff)，即 r > √(b·cutoff)/π；
@@ -220,7 +236,7 @@ def phase_kernels(
     Returns
     -------
     list of ndarray
-        各高斯项的 2D 相位核（奇数尺寸，形状 (ny, nx)，中心为峰值）。
+        各高斯项的 2D 相位核（奇数尺寸，形状 (ny, nx)，中心为峰值），单位 rad。
     """
     try:
         sx, sy = float(sampling[0]), float(sampling[1])
@@ -229,6 +245,7 @@ def phase_kernels(
     if phase_floor is None:
         phase_floor = 1e-6 if table == "peng" else None
     a, b = get_factors(symbol, table)
+    pixel_area = sx * sy
     kernels = []
     for ai, bi in zip(a, b):
         # 实空间项 γλ(πa/b)·exp(-π²r²/b) 的截断半径
@@ -250,7 +267,7 @@ def phase_kernels(
         beta = np.pi / np.sqrt(bi)
         d_erf_x = _erf(beta * edges_x[1:]) - _erf(beta * edges_x[:-1])
         d_erf_y = _erf(beta * edges_y[1:]) - _erf(beta * edges_y[:-1])
-        k = (gamma_lambda * ai / 4.0) * np.outer(d_erf_y, d_erf_x)
+        k = (gamma_lambda * ai / (4.0 * pixel_area)) * np.outer(d_erf_y, d_erf_x)
         kernels.append(k)
     return kernels
 
