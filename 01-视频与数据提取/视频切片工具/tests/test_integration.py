@@ -12,7 +12,7 @@ import pytest
 import tifffile
 
 from video_extractor.decoder import FrameDecoder, resolve_frame_spec
-from video_extractor.ffmpeg import FFmpegManager, probe_video
+from video_extractor.ffmpeg import probe_video
 from video_extractor.models import (
     BitDepth,
     ColorMode,
@@ -24,9 +24,7 @@ from video_extractor.models import (
 from video_extractor.runner import JobRunner, find_videos
 
 
-@pytest.fixture(scope="module")
-def ffmpeg_paths():
-    return FFmpegManager().resolve()
+# ffmpeg_paths（含 FFmpeg 缺失时 SKIP 兜底）见 tests/conftest.py
 
 
 @pytest.fixture(scope="module")

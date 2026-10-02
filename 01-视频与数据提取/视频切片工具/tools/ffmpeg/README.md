@@ -26,3 +26,11 @@ THIRD_PARTY_NOTICES.md
 并完整运行测试。`tem_video_extractor_v4.spec` 和 `scripts/build.ps1` 会在共享库
 不完整时拒绝构建。
 
+## 本地跑集成/回归测试的前提
+
+`tests/test_integration.py` 与 `tests/test_regression.py` 依赖本机可解析到的
+真实 FFmpeg/ffprobe ≥8.0.3 二进制对（两个可执行文件需版本一致）。本地仓库
+不含 `tools/ffmpeg/*.exe` 时，先把 FFmpeg 8.0.3+ 的 `ffmpeg.exe`、`ffprobe.exe`
+放进本目录（或装好可被 PATH/imageio_ffmpeg 解析到的同版本对）再跑 pytest；
+缺二进制时这两份用例会自动 SKIP（见 `tests/conftest.py`），不会报 ERROR。
+

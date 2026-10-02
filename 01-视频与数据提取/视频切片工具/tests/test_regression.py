@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import tifffile
 
-from video_extractor.ffmpeg import FFmpegManager, probe_video
+from video_extractor.ffmpeg import probe_video
 from video_extractor.models import (
     ExtractOptions,
     JobState,
@@ -28,9 +28,7 @@ from video_extractor.models import (
 from video_extractor.runner import JobRunner
 
 
-@pytest.fixture(scope="module")
-def ffmpeg_paths():
-    return FFmpegManager().resolve()
+# ffmpeg_paths（含 FFmpeg 缺失时 SKIP 兜底）见 tests/conftest.py
 
 
 @pytest.fixture(scope="module")
