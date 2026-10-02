@@ -35,14 +35,36 @@ def main():
             # Get offset and dtype
             offset = f.dataOffset[i]
             dtype_code = f.dataType[i]
-        
-            # DM4 data type mapping
+
+            # DM4 image dataType mapping (image data body semantics).
+            # Source: ncempy.io.dm._DM2NPDataTypes / Gatan dm4io.h
+            # GatanDataType enum. NOT the tag-level encoded-type table
+            # (_EncodedTypeDTypes): that one maps code 2 to int16 and
+            # code 10 to uint8, which silently corrupts image data.
             DM4_DTYPES = {
-                2: np.int16, 3: np.int32, 4: np.uint16, 5: np.uint32,
-                6: np.float32, 7: np.float64, 8: np.int8, 9: np.uint8,
-                10: np.uint8, 11: np.uint64, 12: np.uint64,
+                1: np.int16, 2: np.float32, 3: np.complex64,
+                6: np.uint8, 7: np.int32, 9: np.int8,
+                10: np.uint16, 11: np.uint32, 12: np.float64,
+                13: np.complex128,
             }
-            base_dtype = DM4_DTYPES.get(dtype_code, np.uint8)
+            if dtype_code not in DM4_DTYPES:
+                raise RuntimeError(
+                    f'Unsupported DM4 dataType code {dtype_code}; supported '
+                    f'codes: {sorted(DM4_DTYPES)}')
+            base_dtype = DM4_DTYPES[dtype_code]
+
+            # The tag tree declares the byte count of the data block; it
+            # must match element count x itemsize of the mapped dtype,
+            # otherwise decoding would silently produce garbage.
+            n_elements = (f.xSize[i] * f.ySize[i] * f.zSize[i] * f.zSize2[i])
+            data_sizes = getattr(f, 'dataSize', None)
+            if data_sizes is not None and i < len(data_sizes):
+                declared = int(data_sizes[i])
+                if declared != n_elements * np.dtype(base_dtype).itemsize:
+                    raise RuntimeError(
+                        f'dataType {dtype_code} -> {np.dtype(base_dtype)} '
+                        f'implies {n_elements * np.dtype(base_dtype).itemsize} '
+                        f'bytes but the tag tree declares {declared}')
         
             # Check byte order
             with open(cu_path, 'rb') as fp:
@@ -142,7 +164,10 @@ def main():
             print(f'  {"="*60}')
             print(f'  {"Metric":<30} {"Cu foil":<15} {"Au SI19":<15}')
             print(f'  {"-"*60}')
-            print(f'  {"Data type":<30} {"uint8":<15} {"int16":<15}')
+            print(f'  {"Data type":<30} {base_dtype.__name__:<15} {"float32":<15}')
+            print(f'  (dtype labels follow the image dataType table; the old')
+            print(f'   "Cu=uint8 / Au=int16" labels came from the wrong')
+            print(f'   encoded-type table: Au dataType=2 -> float32.)')
             print(f'  {"Negative pixels":<30} {"0%":<15} {"~50%":<15}')
             print(f'  {"Mean intensity":<30} {data.mean():<15.1f} {"~0 (raw)":<15}')
             print(f'  {"Center/Corner ratio":<30} {center_val/corner_val:<15.3f} {"~1.0":<15}')

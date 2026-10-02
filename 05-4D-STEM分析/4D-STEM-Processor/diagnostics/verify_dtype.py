@@ -27,7 +27,8 @@ def main():
     print('='*70)
 
     # From DM4 header: byte_order=1 means little-endian
-    # From metadata: dataType=2 means int16
+    # From metadata: dataType=2 means float32 (int16 came from the old
+    # mis-sourced dtype table; corrected 2026-10, see core/dm4_io.py)
 
     # Test different interpretations
     with open(dm4_path, 'rb') as f:

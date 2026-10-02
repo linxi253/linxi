@@ -112,10 +112,16 @@ SSB 离焦（像差校正）与 ePIE 扫描步距（<1 为超分辨采样）。
 
 | 数据集 | 扫描尺寸 | 探测器尺寸 | 数据类型 | 状态 |
 |--------|----------|------------|----------|------|
-| Au_SI19 | 2048×2048 | 32×32 | int16 | 有质量问题 |
-| Au_SI20 | 2048×2048 | 31×32 | int16 | 有质量问题 |
-| Au_SI21 | 2048×2048 | 30×34 | int16 | 有质量问题 |
-| Cu foil (标准) | 45×45 | 512×512 | uint8 | 正常 |
+| Au_SI19 | 2048×2048 | 32×32 | float32 (dataType=2) | 有质量问题 |
+| Au_SI20 | 2048×2048 | 31×32 | float32 (dataType=2) | 有质量问题 |
+| Au_SI21 | 2048×2048 | 30×34 | float32 (dataType=2) | 有质量问题 |
+| Cu foil (标准) | 45×45 | 512×512 | 待复核¹ | 正常 |
+
+> ¹ 早期文档按错码表（ncempy 的 tag 编码类型表 `_EncodedTypeDTypes`）把 Cu foil
+> 记为 uint8、Au 记为 int16。图像 dataType 码的正确语义见
+> `core/dm4_io.py` 的 `DM4_DTYPES`（2=float32、10=uint16 等）；Au 的头部
+> dataType=2 → float32，Cu foil 的原始 dataType 码仓库内无记录，需用
+> DM4 头部重新确认。
 
 ---
 
@@ -190,7 +196,7 @@ pip install numpy scipy matplotlib ncempy
 │                                                             │
 │  1. 数据提取 (extract_au_correct.py)                         │
 │     ├── 读取 DM4 文件（使用 ncempy）                         │
-│     ├── 识别数据类型（int16 little-endian）                  │
+│     ├── 识别数据类型（按 dataType 码映射，Au 为 float32）    │
 │     ├── 提取 4D-STEM 数据立方体                              │
 │     └── 裁剪感兴趣区域（128×128 扫描位置）                   │
 │                                                             │
@@ -230,11 +236,11 @@ import numpy as np
 f = dm.fileDM('007_STEM SI.dm4')
 
 # 识别 4D-STEM 对象（ndim=4）
-# 数据类型: int16 (dataType=2)
+# 数据类型: float32 (dataType=2；旧文档按错码表记为 int16)
 # 字节序: little-endian (byte_order=1)
 
 # 使用 memmap 读取数据
-data = np.memmap(filepath, dtype='<i2', mode='r', offset=offset,
+data = np.memmap(filepath, dtype='<f4', mode='r', offset=offset,
                  shape=(det_y, det_x, scan_y, scan_x))
 
 # 转换维度顺序: (det_y, det_x, scan_y, scan_x) -> (scan_y, scan_x, det_y, det_x)
@@ -296,25 +302,25 @@ ssb_result = ssb_reconstruct(
 
 ## 发现的技术问题
 
-### 问题 1: 数据类型错误（已修复）
+### 问题 1: 数据类型错误（已修复；当时的 dtype 结论需再修正）
 
 | 项目 | 详情 |
 |------|------|
-| **问题描述** | 原始提取使用 `>u2` (big-endian uint16)，实际应为 `<i2` (little-endian int16) |
+| **问题描述** | 原始提取使用 `>u2` (big-endian uint16)，字节序确属错误；当时把 dtype 修为 `<i2` (little-endian int16)，但那是按错码表（ncempy 的 tag 编码类型表 `_EncodedTypeDTypes`）得出的结论——Au 的 dataType=2 按图像 dataType 表（`core/dm4_io.py` 的 `DM4_DTYPES`）应为 `<f4` (little-endian float32) |
 | **发现方法** | `check_raw_data.py` 对比不同数据类型解释的结果 |
-| **影响** | 数据完全错误，无法进行任何分析 |
-| **解决方案** | 使用 ncempy 正确读取 DM4 元数据，确定正确数据类型 |
+| **影响** | 数据完全错误，无法进行任何分析；按 int16 解码 float32 字节数相同、能通过文件大小自检，错值静默进入后续定量分析 |
+| **解决方案** | 使用 ncempy 正确读取 DM4 元数据确定 dataType 码，并按图像 dataType 表映射 dtype；`core/dm4_io.py` 现在还会在解码前校验「码→itemsize→与 tag 声明字节数一致」 |
 | **修复状态** | ✅ 已修复 |
 
 ### 问题 2: 约 50% 负值像素（数据质量问题）
 
 | 项目 | 详情 |
 |------|------|
-| **问题描述** | Au 数据有 48.8-49.7% 的像素为负值 |
+| **问题描述** | Au 数据有 48.8-49.7% 的像素为负值（该比例按当时的 int16 解码统计） |
 | **发现方法** | `diagnose_au.py` 统计负值比例 |
-| **原因** | 数据采集时进行了激进的背景扣除 |
+| **原因** | 当时归因于采集时激进的背景扣除；但 float32 位型被按 int16 截断本就会产生约一半「负值」，该观察主要须先以正确的 float32 解码重新核实，再谈背景扣除 |
 | **影响** | 物理意义丧失，CoM 计算需要正值 |
-| **解决方案** | 偏移处理: `data_shifted = data - data.min()` |
+| **解决方案** | 偏移处理: `data_shifted = data - data.min()`（对正确解码后的数据重新评估） |
 | **修复状态** | ⚠️ 可处理，但信息已丢失 |
 
 ### 问题 3: 探测器尺寸过小（硬件限制）
@@ -414,9 +420,11 @@ ssb_result = ssb_reconstruct(
 
 统一的 DM4 读取模块，是数据进管线的唯一入口：
 
-- `read_dm4_metadata()`：用 ncempy 读取头部，按 DM4 类型码映射 numpy dtype
-  （2=int16、4=uint16、6=float32、7=float64、8/9/10=uint8 等），不再按文件
-  大小猜测；
+- `read_dm4_metadata()`：用 ncempy 读取头部，按 DM4 图像 dataType 码映射
+  numpy dtype（1=int16、2=float32、3=complex64、6=uint8、7=int32、9=int8、
+  10=uint16、11=uint32、12=float64、13=complex128，来源为 ncempy dm.py 的
+  `_DM2NPDataTypes` / Gatan dm4io.h 枚举），不再按文件大小猜测；映射结果
+  还会与 tag 树为数据块声明的字节数精确比对，不一致即报错拒绝解码；
 - `extract_4d_data()`：按 `(det_y, det_x, scan_y, scan_x)` 布局 memmap 裁剪
   并转置为 `(scan_y, scan_x, det_y, det_x)`；
 - `fix_dimensions()`：委托 `dimension_utils` 做维度校验/修复；
@@ -484,7 +492,8 @@ SSB 单边带叠层成像算法。
 主处理脚本，使用正确提取的数据。
 
 **功能:**
-- 加载正确提取的 Au 数据 (int16 little-endian)
+- 加载提取后的 Au 数据（历史 `*_correct.npy` 为按错码表以 int16 提取的产物，
+  数值不可作定量依据；当前管线经 `core/dm4_io.py` 按 dataType=2 以 float32 解码）
 - 预处理：偏移处理负值
 - 运行 DPC 和 SSB 分析
 - 生成对比图和电场映射
@@ -725,7 +734,7 @@ $env:STEM4D_OUTPUT = 'D:\results'
 
 | 指标 | Cu foil (标准) | Au SI19 | 评估 |
 |------|----------------|---------|------|
-| 数据类型 | uint8 | int16 | Au 为有符号 |
+| 数据类型 | 待复核（旧记录 uint8 系错码表） | float32 (dataType=2；旧记录 int16 系错码表) | dtype 须按 DM4 头部 dataType 码确认 |
 | 负值像素 | 0% | 48.84% | ❌ 巨大差异 |
 | 平均强度 | 50.2 | ~0 (原始) | Au 需偏移 |
 | 中心/角落比 | 1.571 | ~1.0 | ❌ Au 无 BF 盘 |

@@ -39,17 +39,100 @@ def make_synthetic_datacube(scan=16, det=24, alpha=5, shift=(1.5, -1.0),
 
 
 def test_dm4_dtype_mapping():
-    assert np.dtype(dm4_io.numpy_dtype_from_code(2)) == np.dtype('<i2')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(4)) == np.dtype('<u2')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(6)) == np.dtype('<f4')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(7)) == np.dtype('<f8')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(10)) == np.dtype('u1')
+    # DM4 *image dataType* semantics, i.e. ncempy dm.py _DM2NPDataTypes /
+    # Gatan dm4io.h GatanDataType — NOT the tag-level encoded-type table.
+    expected = {
+        1: '<i2', 2: '<f4', 3: '<c8', 6: '<u1', 7: '<i4', 9: '<i1',
+        10: '<u2', 11: '<u4', 12: '<f8', 13: '<c16',
+    }
+    assert set(dm4_io.DM4_DTYPES) == set(expected)
+    for code, dtype_str in expected.items():
+        assert np.dtype(dm4_io.numpy_dtype_from_code(code)) == np.dtype(dtype_str)
+
+
+def test_dm4_dtype_mapping_rejects_encoded_type_table():
+    # Regression lock on the old bug: the table used to be ncempy's
+    # tag-level _EncodedTypeDTypes, under which image dataType 2 (float32)
+    # was decoded as int16 and dataType 10 (uint16) as uint8. Codes 4/5/8
+    # exist only in that tag-level table, while 1/13 exist only in the
+    # correct image table — either signature returning means the wrong
+    # table came back.
+    import pytest
+    assert np.dtype(dm4_io.numpy_dtype_from_code(2)) == np.dtype('<f4')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(10)) == np.dtype('<u2')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(1)) == np.dtype('<i2')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(13)) == np.dtype('<c16')
+    for legacy_tag_code in (4, 5, 8):
+        with pytest.raises(RuntimeError):
+            dm4_io.numpy_dtype_from_code(legacy_tag_code)
 
 
 def test_dm4_dtype_mapping_rejects_unknown():
     import pytest
     with pytest.raises(RuntimeError):
         dm4_io.numpy_dtype_from_code(999)
+
+
+def test_declared_data_bytes_reads_ncempy_data_size():
+    # declared_data_bytes() mirrors ncempy's fileDM.dataSize semantics:
+    # the byte count the DM tag tree declares for a data block, or None
+    # when it cannot be determined.
+    class _Stub:
+        dataSize = [np.uint64(48), None, 'not-a-number']
+
+    assert dm4_io.declared_data_bytes(_Stub(), 0) == 48
+    assert dm4_io.declared_data_bytes(_Stub(), 1) is None
+    assert dm4_io.declared_data_bytes(_Stub(), 2) is None
+    assert dm4_io.declared_data_bytes(_Stub(), 7) is None   # out of range
+    assert dm4_io.declared_data_bytes(object(), 0) is None  # attribute absent
+
+
+def _fake_filedm(declared_bytes):
+    import io
+
+    class _FakeFileDM:
+        def __init__(self):
+            self.numObjects = 1
+            self.dataShape = [4]
+            self.dataType = [2]      # float32 per the image dataType table
+            self.xSize = [4]
+            self.ySize = [4]
+            self.zSize = [16]
+            self.zSize2 = [16]
+            self.dataOffset = [64]
+            self.dataSize = [declared_bytes]
+            self.scale = [1.0, 1.0, 1.0, 1.0]
+            self.scaleUnit = ['nm', 'nm', 'mrad', 'mrad']
+            self.fid = io.BytesIO()
+
+    return _FakeFileDM()
+
+
+def test_read_dm4_metadata_checks_declared_byte_count(tmp_path, monkeypatch):
+    # The dataType code -> itemsize mapping must agree with the byte count
+    # the tag tree declares for the Data blob. The old wrong table decoded
+    # dataType 2 (float32, 4 bytes/element) as int16 (2 bytes/element),
+    # which passes any file-size bound check but silently corrupts every
+    # value; the exact-equality check must fail loudly instead.
+    import types
+
+    import pytest
+
+    path = tmp_path / 'synthetic.dm4'
+    path.write_bytes(b'\x00' * (64 + 4 * 4 * 16 * 16 * 4))
+
+    consistent = _fake_filedm(4 * 4 * 16 * 16 * 4)   # float32: 4 B/element
+    monkeypatch.setattr(dm4_io, '_ncempy_dm',
+                        types.SimpleNamespace(fileDM=lambda _p: consistent))
+    meta = dm4_io.read_dm4_metadata(str(path))
+    assert meta['dtype'] == np.dtype('<f4')
+    assert meta['dtype_name'] == 'float32'
+
+    mismatched = _fake_filedm(4 * 4 * 16 * 16 * 2)   # old-table signature
+    monkeypatch.setattr(dm4_io, '_ncempy_dm',
+                        types.SimpleNamespace(fileDM=lambda _p: mismatched))
+    with pytest.raises(RuntimeError, match='declares'):
+        dm4_io.read_dm4_metadata(str(path))
 
 
 def test_preprocess_preserves_bf_disk():

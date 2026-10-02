@@ -12,9 +12,14 @@ Format overview:
 - Tag entry: type(1B: 0x14=group, 0x15=data) + label_len(2B) + label
 - Tag data: "%%%%" delimiter + info_array_length(4B) + info_array + data
 
-Data type codes:
-    2=int16, 3=int32, 4=uint16, 5=uint32, 6=float32, 7=float64,
-    8=bool, 9=char, 10=octet, 11=uint64, 12=uint64
+Data type codes (two distinct code spaces, do not mix them up):
+    Tag-tree encoded types (info arrays of binary tags, incl. the header
+    of the image "Data" blob; see DM_TAG_ENCODED_TYPE_MAP):
+        2=int16, 3=int32, 4=uint16, 5=uint32, 6=float32, 7=float64,
+        8=bool, 9=char, 10=octet, 11=uint64, 12=uint64
+    Image dataType codes (value of the ImageData/DataType tag; see
+    DM_TYPE_MAP): 1=int16, 2=float32, 3=complex64, 6=uint8, 7=int32,
+    9=int8, 10=uint16, 11=uint32, 12=float64, 13=complex128
 
 Reference:
     Based on the DM3/DM4 format specification documented by the
@@ -28,8 +33,8 @@ import numpy as np
 from typing import Tuple, Dict, Any, Optional, BinaryIO, List
 
 __all__ = [
-    'DM3Error', 'DM_TYPE_MAP', 'is_dm_file', 'read_dm_file',
-    'read_dm_file_simple', 'read_tiff',
+    'DM3Error', 'DM_TYPE_MAP', 'DM_TAG_ENCODED_TYPE_MAP', 'is_dm_file',
+    'read_dm_file', 'read_dm_file_simple', 'read_tiff',
 ]
 
 
@@ -38,8 +43,33 @@ class DM3Error(Exception):
     pass
 
 
-# Numpy dtype mapping for DM type codes
+# DM 图像 dataType 码表：ImageList/.../ImageData/DataType 标量值的语义。
+# Source: ncempy.io.dm._DM2NPDataTypes / Gatan dm4io.h GatanDataType 枚举。
+# 注意：这不是 tag 树的编码类型表（见下方 DM_TAG_ENCODED_TYPE_MAP）。
+# 把两者混用——用编码类型表解释图像 dataType（float32 码 2 当 int16、
+# uint16 码 10 当 uint8）——会静默解码出错误数值；反之用本表解释 tag
+# info 数组的类型码也会按错误的 itemsize 读取。
 DM_TYPE_MAP = {
+    1: np.dtype('int16'),
+    2: np.dtype('float32'),
+    3: np.dtype('complex64'),
+    6: np.dtype('uint8'),
+    7: np.dtype('int32'),
+    9: np.dtype('int8'),
+    10: np.dtype('uint16'),
+    11: np.dtype('uint32'),
+    12: np.dtype('float64'),
+    13: np.dtype('complex128'),
+}
+
+# DM tag 树「编码类型表」：二进制 tag info 数组中简单类型/数组元素类型的
+# 语义（SHORT=2, LONG=3, USHORT=4, ULONG=5, FLOAT=6, DOUBLE=7, BOOLEAN=8,
+# CHAR=9, OCTET=10, UINT64=12）。Source: ncempy.io.dm 的 _EncodedTypeDTypes
+# 与 _encodedTypeSizes——ncempy 正是用它计算并跳过包括图像 Data 块在内的
+# 所有二进制 tag 数组。本文件的 tag 解析（_read_simple_type / _read_array /
+# _read_complex_array / read_dm_file_simple 的原始扫描）只应使用这张表；
+# 图像 dataType 码一律用上方 DM_TYPE_MAP。
+DM_TAG_ENCODED_TYPE_MAP = {
     2: np.dtype('int16'),
     3: np.dtype('int32'),
     4: np.dtype('uint16'),
@@ -420,9 +450,9 @@ class _DMReader:
 
     def _read_simple_type(self, type_code: int) -> Any:
         """Read a single value of the given type code."""
-        if type_code not in DM_TYPE_MAP:
+        if type_code not in DM_TAG_ENCODED_TYPE_MAP:
             return None
-        dtype = DM_TYPE_MAP[type_code]
+        dtype = DM_TAG_ENCODED_TYPE_MAP[type_code]
         raw = self._read_bytes(dtype.itemsize)
         if len(raw) < dtype.itemsize:
             return None
@@ -431,12 +461,12 @@ class _DMReader:
 
     def _read_array(self, elem_type_code: int, length: int) -> Optional[np.ndarray]:
         """Read an array of simple type."""
-        if elem_type_code not in DM_TYPE_MAP:
+        if elem_type_code not in DM_TAG_ENCODED_TYPE_MAP:
             return None
         if length <= 0 or length > 250_000_000:
             return None
 
-        dtype = DM_TYPE_MAP[elem_type_code]
+        dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type_code]
         data_size = length * dtype.itemsize
         remaining = self._remaining_bytes()
         if data_size > remaining:
@@ -471,8 +501,8 @@ class _DMReader:
             # Calculate element size
             elem_size = 0
             for ft in field_types:
-                if ft in DM_TYPE_MAP:
-                    elem_size += DM_TYPE_MAP[ft].itemsize
+                if ft in DM_TAG_ENCODED_TYPE_MAP:
+                    elem_size += DM_TAG_ENCODED_TYPE_MAP[ft].itemsize
                 else:
                     return None  # Unknown field type
 
@@ -488,7 +518,7 @@ class _DMReader:
             # Build structured dtype
             dt_list = []
             for i, ft in enumerate(field_types):
-                dt_list.append((f'f{i}', DM_TYPE_MAP[ft].newbyteorder(self.byte_order)))
+                dt_list.append((f'f{i}', DM_TAG_ENCODED_TYPE_MAP[ft].newbyteorder(self.byte_order)))
             struct_dtype = np.dtype(dt_list)
 
             arr = np.frombuffer(raw, dtype=struct_dtype, count=arr_len)
@@ -682,9 +712,9 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
 
                 if len(info_array) == 3 and info_array[0] == 20:
                     elem_type, arr_len = info_array[1], info_array[2]
-                    if elem_type not in DM_TYPE_MAP or arr_len <= 100:
+                    if elem_type not in DM_TAG_ENCODED_TYPE_MAP or arr_len <= 100:
                         continue
-                    dtype = DM_TYPE_MAP[elem_type].newbyteorder(endian)
+                    dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type].newbyteorder(endian)
                     total_bytes = int(arr_len) * dtype.itemsize
                     if total_bytes <= 0 or idx + total_bytes > file_size:
                         continue
@@ -694,8 +724,8 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
                             (int(arr_len), idx, dtype, shape_2d)
                         )
                     idx += total_bytes
-                elif len(info_array) == 1 and info_array[0] in DM_TYPE_MAP:
-                    idx += DM_TYPE_MAP[info_array[0]].itemsize
+                elif len(info_array) == 1 and info_array[0] in DM_TAG_ENCODED_TYPE_MAP:
+                    idx += DM_TAG_ENCODED_TYPE_MAP[info_array[0]].itemsize
 
             if not candidates:
                 raise DM3Error("No plausible 2D image data found in DM file.")

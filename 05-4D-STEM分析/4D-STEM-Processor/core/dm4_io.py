@@ -23,28 +23,32 @@ except Exception:  # pragma: no cover - depends on environment
     NCEMPY_AVAILABLE = False
 
 
-# DM4 data-type codes -> numpy base types.
-# Source: ncempy.io.dm._EncodedTypeDTypes (the mapping used for binary data
-# tags; code 10 is uint8, which matches the Cu foil standard dataset).
+# DM4 image dataType codes -> numpy base types.
+# Source: ncempy.io.dm._DM2NPDataTypes (the mapping ncempy applies to the
+# image data body) / the GatanDataType enum in Gatan's dm4io.h.
+# This is NOT ncempy's tag-level encoded-type table (_EncodedTypeDTypes,
+# which only serves small binary tag values such as "2: SHORT"): using that
+# table for image data silently decodes float32 (code 2) as int16,
+# complex64 (3) as int32, uint16 (10) as uint8 and float64 (12) as uint64.
 # ncempy only supports little-endian files, so the prefix is always '<'.
 DM4_DTYPES = {
-    2: np.int16,
-    3: np.int32,
-    4: np.uint16,
-    5: np.uint32,
-    6: np.float32,
-    7: np.float64,
-    8: np.uint8,
-    9: np.uint8,
-    10: np.uint8,
-    11: np.uint64,
-    12: np.uint64,
+    1: np.int16,
+    2: np.float32,
+    3: np.complex64,
+    6: np.uint8,
+    7: np.int32,
+    9: np.int8,
+    10: np.uint16,
+    11: np.uint32,
+    12: np.float64,
+    13: np.complex128,
 }
 
 DM4_DTYPE_NAMES = {np.int16: 'int16', np.int32: 'int32', np.uint16: 'uint16',
                    np.uint32: 'uint32', np.float32: 'float32',
                    np.float64: 'float64', np.uint8: 'uint8', np.int8: 'int8',
-                   np.uint64: 'uint64'}
+                   np.complex64: 'complex64',
+                   np.complex128: 'complex128'}
 
 
 def ncempy_available():
@@ -53,13 +57,39 @@ def ncempy_available():
 
 
 def numpy_dtype_from_code(code):
-    """Map a DM4 data-type code to a little-endian numpy dtype."""
+    """Map a DM4 image dataType code to a little-endian numpy dtype."""
     base = DM4_DTYPES.get(int(code))
     if base is None:
         raise RuntimeError(
             f"Unsupported DM4 data-type code: {code}. Supported codes: "
             f"{sorted(DM4_DTYPES)}")
     return np.dtype('<' + np.dtype(base).str[1:])
+
+
+def declared_data_bytes(f, index):
+    """Byte count the DM tag tree declares for an image data block.
+
+    ncempy parses every binary tag array header (including the image
+    ``Data`` blob) with the tag-level encoded-type sizes and records the
+    declared byte count as ``<path>.ImageData.Data.arraySize``, exposed as
+    the ``fileDM.dataSize`` list (parallel to ``dataOffset``/``dataType``).
+    This is an independent statement from the file itself: the number of
+    bytes the tag tree reserved for the data block.
+
+    Returns None when the declaration is unavailable, in which case the
+    caller falls back to the file-size bound check only.
+    """
+    sizes = getattr(f, 'dataSize', None)
+    if sizes is None:
+        return None
+    try:
+        value = sizes[index]
+    except (TypeError, IndexError, KeyError):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def dtype_display_name(dtype):
@@ -137,11 +167,32 @@ def read_dm4_metadata(dm4_path):
             'units': units,
         })
 
-        # Sanity check: the header offset + expected byte count must not
-        # exceed the file size. A mismatch means the dtype/dimensions are
-        # inconsistent and the data would be garbage.
+        # Sanity checks before anything memmaps the data block:
+        #
+        # 1. Code -> dtype -> itemsize must agree with the byte count the
+        #    DM tag tree itself declares for the Data blob (element count
+        #    times the encoded-type item size written in the tag header,
+        #    recorded by ncempy as ImageData.Data.arraySize). A drifted
+        #    dataType table passes the file-size bound below whenever its
+        #    itemsize is too small or equal (e.g. float32 declared as 4
+        #    bytes/element but decoded as int16 = 2 bytes/element); this
+        #    exact-equality check turns that silent corruption into a loud
+        #    failure.
+        # 2. The header offset + expected byte count must not exceed the
+        #    file size. A mismatch means the dtype/dimensions are
+        #    inconsistent and the data would be garbage.
         n_elements = scan_y * scan_x * det_y * det_x
-        expected_size = offset + n_elements * dtype.itemsize
+        expected_bytes = n_elements * dtype.itemsize
+        declared_bytes = declared_data_bytes(f, obj_4d)
+        if declared_bytes is not None and declared_bytes != expected_bytes:
+            raise RuntimeError(
+                f"DM4 dataType code {obj['dtype_code']} maps to {dtype} "
+                f"({dtype.itemsize} bytes/element), implying "
+                f"{expected_bytes} bytes of data, but the tag tree declares "
+                f"{declared_bytes} bytes in {os.path.basename(dm4_path)}. "
+                f"The data-type mapping is inconsistent with the file; "
+                f"refusing to decode garbage.")
+        expected_size = offset + expected_bytes
         actual_size = os.path.getsize(dm4_path)
         if expected_size > actual_size:
             raise RuntimeError(
