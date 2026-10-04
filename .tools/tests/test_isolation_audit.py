@@ -225,7 +225,8 @@ def test_closure_report_missing_or_wrong_dep_is_broken(ec):
 # ---------------------------------------------------------------------------
 # 2. directory pruning for launcher scripts
 # ---------------------------------------------------------------------------
-EXCLUDED = (".venv", ".venv.pre-rebuild-20261003", "dist", "build", "08-历史版本",
+EXCLUDED = (".venv", ".venv.pre-rebuild-20261003", ".venv-backup-py311-20261004",
+            "dist", "build", "08-历史版本",
             "data", "cache", ".review-tmp", "site-packages", "node_modules")
 
 

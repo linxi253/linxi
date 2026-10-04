@@ -65,8 +65,11 @@ ROOT = ec.REPO_ROOT                       # default; overridden by --manifest
 
 SCRIPT_SUFFIXES = (".bat", ".cmd", ".ps1")
 
-# Directory names never descended into. Prefix ``.venv.`` also covers the
-# timestamped backups (e.g. .venv.pre-rebuild-20261003).
+# Directory names never descended into. Prefixes cover renamed/timestamped
+# variants of an environment or build tree, e.g. ``.venv.pre-rebuild-20261003``,
+# ``.venv-backup-py311-20261004``, ``dist.old``. Only the *directory* is pruned:
+# ordinary source directories are still scanned, so a genuine bare-``python``
+# launcher in ``src/`` is still reported.
 PRUNE_NAMES = {
     ".venv", ".venv-build", ".venv-run", "venv", "env",
     "site-packages", "node_modules", "__pycache__",
@@ -75,7 +78,7 @@ PRUNE_NAMES = {
     "08-历史版本", "legacy", ".review-tmp", ".codex_tmp", ".runtime",
     ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
 }
-PRUNE_PREFIXES = (".venv.", "venv.", "dist.", "build.")
+PRUNE_PREFIXES = (".venv.", ".venv-", "venv.", "venv-", "dist.", "build.")
 
 BARE_PYTHON = re.compile(r"(?<![\w\\./\-$])python(?:\.exe)?(?![\w.\-])")
 SAFE_LINE = re.compile(
