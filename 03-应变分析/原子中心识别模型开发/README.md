@@ -2,6 +2,8 @@
 
 HAADF-STEM 与 HRTEM 原子中心模型的独立开发仓库。训练代码、数据治理和评测在这里完成；PPA 稳定版只消费经过验证、带 manifest 和 SHA-256 的发布模型。
 
+**版本隔离边界：** 本项目声明 CPython `>=3.10,<3.11`，当前推理锁固定 numpy 1.26.4 / opencv 4.11；工作区另有使用 numpy 2.x 的工具，应分别使用独立环境。若升级本项目依赖，需要重新验证训练、ONNX 导出和 CPU 推理并同步相应锁；不能从其它工具的测试通过推断本项目兼容。
+
 ## 当前状态
 
 已完成 M1～M3 的软件建设和合成数据验收，包括数据审计/迁移、独立训练运行、断点续训、真实 PyTorch/ONNX 后端。正式科研模型仍需真实数据验收，PPA GUI 接入属于后续 M4。
@@ -38,7 +40,6 @@ python scripts\smoke_test.py
 
 本机原 Miniconda Python 的 ONNX 原生校验器会崩溃；安装脚本准备了项目内官方 CPython 3.10.11 运行时。训练/导出统一运行 `scripts/atom-center.ps1`，标注 GUI 继续使用现有 `.venv` 启动入口。
 
-**版本隔离边界（审计 42）：** 本子项目钉死 CPython 3.10（`requires-python >=3.10,<3.11`）与 numpy 1.26.4 / opencv 4.11；`pyproject.toml` 与 `requirements/` 下的三份锁文件一致，仓库内其余工具则使用 numpy 2.2.6。这是有意的隔离边界，不是遗漏：两组精确钉死的版本不能并入同一份统一依赖，跨进程/跨工具调用必然存在版本落差。若确需统一到 numpy 2.x，必须先解除 `<3.11` 约束，再重新验证训练、ONNX 导出与纯 CPU 推理三条链路，并同步更新 `pyproject.toml` 与全部锁文件。
 
 ## 数据原则
 

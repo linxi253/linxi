@@ -697,6 +697,13 @@ class EMImageAnalyzerApp:
         text += f"  非晶面积: {result.amorphous_area_nm2:,.2f} nm²\n"
         text += f"  晶体周长: {result.crystalline_perimeter_nm:,.2f} nm\n"
         text += f"  形状因子: {result.shape_factor_mean:.4f}\n"
+        # 口径声明（合并主源码的有效内容）：与导出参数表保持一致，避免把
+        # "非晶面积"直接当作非晶相的物理面积引用（补集含真空/支持膜/孔洞）。
+        # 新版已有的非有限值告警与"未标定"单位处理保留在各自路径，不在此重复。
+        text += (
+            "\n注：「非晶区域」是「晶体掩膜」的灰度补集，包含真空、支持膜和孔洞，"
+            "未做背景剔除；分割均为灰度阈值判据，不代表晶体学/非晶结构的直接鉴定。\n"
+        )
 
         self._show_text_in_preview(text)
 

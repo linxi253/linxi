@@ -7,16 +7,25 @@
 #   - drift_core       <仓库根>\02-图像处理\drift-correction-v7\drift_core.py
 # 因此它们不出现在本清单，也不要往这里加它们的"安装项"。
 #
-# 版本区间取两份上游锁定文件的交集：下界 = 锁定的精确版本（保证解析结果
-# 与两个被复用工具实测过的版本一致），上界沿用 drift-correction-v7 的范围约定：
+# 版本取两份上游**已验证锁定**的精确值（不是区间）：流水线原样复用这两份代码，
+# 只有与它们实测过的同一版本才能声称行为一致。区间约束（如 numpy>=2.2.6,<3）
+# 会让解析器取到远新于上游的版本（numpy 2.5.3 / matplotlib 3.11.2 /
+# tifffile 2026.9.20），从而与上游验证结果脱钩。
 #   视频切片工具\requirements.lock         numpy==2.2.6、tifffile==2025.5.10
 #   drift-correction-v7\requirements.lock  numpy==2.2.6、opencv-python==5.0.0.93、
 #                                          matplotlib==3.10.9、tifffile==2025.5.10
+# 交集：numpy==2.2.6、tifffile==2025.5.10；其余按所属上游的锁定值取。
+#
+# 只列运行依赖：不带 PyInstaller（本目录不打包）与 pytest（需要时按开发说明
+# 单独安装，不混进运行锁）。
 #
 # Python：两上游 requires-python 的交集为 >=3.11,<3.13（视频切片工具
 # >=3.11,<3.14；drift-correction-v7 >=3.10,<3.13），venv 请以 3.11/3.12 为母本。
 
-numpy>=2.2.6,<3
-opencv-python>=5.0.0.93,<6
-tifffile>=2025.5.10,<2027
-matplotlib>=3.10.9,<4
+numpy==2.2.6
+tifffile==2025.5.10
+opencv-python==5.0.0.93
+matplotlib==3.10.9
+# 上游视频工具运行锁声明的 FFmpeg 兜底解析源（video_extractor/ffmpeg.py:124）：
+# 内置 tools/ffmpeg 不可用时才回退到它，属上游运行依赖，一并锁定。
+imageio-ffmpeg==0.6.0

@@ -614,19 +614,54 @@ class MainWindow:
         active = self._background_tasks_active()
         if active:
             if time.monotonic() >= self._close_deadline:
+                # 宿主能力必须在 destroy() **之前**读取：destroy 之后就问不到了。
+                embedded = self._embedded_in_suite()
                 force_quit = messagebox.askyesno(
                     "任务仍未结束",
                     "后台任务在 60 秒内未能安全结束（可能卡在慢速磁盘或网络盘）。\n\n"
-                    "强制退出会立即终止进程，可能残留未清理的临时文件"
-                    "（.partial/.backup）且无法恢复。仍要强制退出吗？",
+                    + (
+                        "强制关闭将只关闭本标签页；后台任务无法安全终止，"
+                        "临时文件（.partial/.backup）可能残留。仍要强制关闭吗？"
+                        if embedded else
+                        "强制退出会立即终止进程，可能残留未清理的临时文件"
+                        "（.partial/.backup）且无法恢复。仍要强制退出吗？"
+                    ),
                 )
                 if force_quit:
                     self._destroy()
+                    if embedded:
+                        # 内嵌在 TEM Suite 中：本工具只是标签页之一，
+                        # os._exit 会连带杀掉其他已打开工具并截断它们正在
+                        # 写出的文件，因此绝不能结束整个进程。
+                        # 关闭路径不得抛异常（此时部件可能已销毁）。
+                        with contextlib.suppress(Exception):
+                            self.status_var.set("已强制关闭本标签页；后台任务可能仍在运行")
+                        return
                     os._exit(1)
                 self._close_deadline = time.monotonic() + 60.0
             self.root.after(100, self._finish_close)
         else:
             self._destroy()
+
+    def _embedded_in_suite(self) -> bool:
+        """本窗口是否被 TEM Suite 以标签页方式内嵌。
+
+        依据**宿主自己声明的能力**判断，而不是 ``tk._default_root`` 的类名 ——
+        Suite 的 Tk 重定向只是让工具拿到 ToolHost，真实默认 root 仍是 Tk/Window，
+        用类名判断会得到错误结论（回归 2026-10-03 R3）。
+        """
+        root = self.root
+        can_terminate = getattr(root, "can_terminate_process", None)
+        if callable(can_terminate):
+            with contextlib.suppress(Exception):
+                return not bool(can_terminate())
+        if getattr(root, "embedded_in_suite", False):
+            return True
+        is_embedded = getattr(root, "is_embedded", None)
+        if callable(is_embedded):
+            with contextlib.suppress(Exception):
+                return bool(is_embedded())
+        return False
 
     def _destroy(self):
         if self._poll_after_id is not None:

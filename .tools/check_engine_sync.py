@@ -50,6 +50,14 @@ EXEMPT = {
         "09 侧多一个 scalar 返回分支（scalar = np.ndim(g)==0；"
         "return float(fe) if scalar else fe），010 侧恒 return fe"
         "——纯 API 便利差异，无物理含义（审计条目 15 更正(3)）",
+    "multislice.py:build_slice_transmissions":
+        "010 侧公开函数额外支持 gpts=(ny, nx) 矩形网格（内部走 010 独有的 "
+        "_plan_slices_shape/_grid_shape），因为 STEM 探针扫描的 x/y 周期不等、"
+        "两轴需各自取 FFT 友好点数；09 只做 HRTEM 成像，标量 gpts 已足够，"
+        "无需矩形网格。两侧**物理内核逐字一致**（_iter_slice_transmissions / "
+        "_accumulate_phase / 相位核完全相同），差异仅在网格解析这一层 API，"
+        "不改变任何已支持输入的数值结果（回归 2026-10-03 R8）。"
+        "若将来 09 也需要矩形网格，应把该解析层提升为共享实现后删除本豁免。",
 }
 
 

@@ -22,6 +22,11 @@ def _looks_like_workspace(path: Path) -> bool:
     return (path / "01-视频与数据提取").is_dir() or (path / "02-图像处理").is_dir()
 
 
+# 主源码开发树里部分项目的源码根比分类目录多一层（如非晶面积统计的
+# pythonProject）。公开候选仓库已扁平化；Suite 需同时支持两种布局。
+_NESTED_SOURCE_ROOT = "pythonProject"
+
+
 def _detect_workspace_root() -> Path:
     """定位存放各工具项目的根目录（即 AIforTEM 目录）。
 
@@ -128,7 +133,34 @@ class ToolSpec:
 
     @property
     def project_dir(self) -> Path:
-        return (WORKSPACE_ROOT / self.relative_dir).resolve()
+        """项目根目录。
+
+        公开候选仓库里各工具是**扁平**布局（``04-统计分析/非晶面积统计``），
+        而主源码开发树里非晶面积统计的源码根多一层 ``pythonProject``
+        （``04-统计分析/非晶面积统计/pythonProject``）。两者都已存在于实际
+        工作区，Suite 必须在显式 ``TEMSUITE_WORKSPACE`` 下都能发现，否则同步时
+        会被迫搬迁主源码目录（回归 2026-10-03 R3）。
+
+        解析顺序：**扁平优先**，只有扁平布局的入口不存在时才回退到
+        ``pythonProject`` 层。这样候选仓库行为完全不变，主源码树也能直接用。
+        """
+        base = (WORKSPACE_ROOT / self.relative_dir).resolve()
+        if self._entry_exists(base):
+            return base
+        nested = base / _NESTED_SOURCE_ROOT
+        if nested.is_dir() and self._entry_exists(nested):
+            return nested
+        return base
+
+    def _entry_exists(self, root: Path) -> bool:
+        """该根目录下是否能找到本工具的入口（不递归，只看本层）。"""
+        if not root.is_dir():
+            return False
+        if self.load_mode == "file":
+            return (root / self.entry).is_file()
+        # module 模式：entry 的首段作为包/模块名查找
+        head = self.entry.split(".")[0]
+        return (root / f"{head}.py").is_file() or (root / head).is_dir()
 
     @property
     def extra_paths(self) -> tuple[Path, ...]:
@@ -202,7 +234,7 @@ TOOLS: tuple[ToolSpec, ...] = (
             "video_extractor.sampling",
             "video_extractor.manifest",
         ),
-        description="视频逐帧提取为 TIFF 堆栈，支持 ImageJ / OME-TIFF 格式与多种采样策略。",
+        description="视频逐帧提取为 ImageJ 兼容 TIFF 堆栈（未压缩、TYX），支持多种采样策略。",
     ),
     # ---------------- 2 · 图像处理 ----------------
     ToolSpec(
@@ -417,8 +449,12 @@ TOOLS: tuple[ToolSpec, ...] = (
         run_mode="subprocess",
         description="HAADF-STEM 特征演化分析，输出 14 张期刊级图表与统计报告。",
         notes=(
-            "该脚本为无 GUI 类的批处理程序，且在模块顶层执行 matplotlib.use('Agg')，"
-            "会全局覆盖其他工具依赖的 TkAgg 后端，因此以独立子进程运行以彻底隔离。"
+            "交互式批处理脚本，**不是**纯 CLI：不带 --file 时它会自建 Tk 根窗口弹出"
+            "文件选择框，再依次询问帧时间间隔与样品描述（取消任一输入即退出）。"
+            "因此 Suite 以默认参数启动时用户会看到该工具自己的选择框，这是预期的"
+            "交互路径；带 --file/--output/--dt 则可无人值守跑完整流程。"
+            "模块顶层执行 matplotlib.use('Agg') 会全局覆盖其他工具依赖的 TkAgg 后端，"
+            "故必须以独立子进程运行以彻底隔离。"
         ),
     ),
     # ---------------- 7 · 模拟仿真 ----------------

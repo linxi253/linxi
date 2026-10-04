@@ -1,5 +1,9 @@
 # EELS边缘价态分析工具 v1
 
+## 开发入口
+
+[修改约定](AGENTS.md) · [源码地图、环境与测试](DEVELOPMENT.md)。开发命令使用项目内解释器；下文历史功能版本与源码包版本分别说明。
+
 用于 DM3/DM4 配对 Dual-EELS Spectrum Image 的样品物理边缘分析。v1 提供 Cu L2,3
 的 Cu0/Cu1/Cu2 非负 MLLS、复散射校正、移动块 bootstrap、模型选择、参数敏感性和
 Cu1 注入恢复检验。

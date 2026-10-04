@@ -409,8 +409,22 @@ class TiffIO:
     def write_stack(filepath: str, frames: Iterable[np.ndarray], meta: dict,
                     progress_callback: Optional[Callable[[float], None]] = None,
                     cancel_event: Optional[threading.Event] = None,
-                    overwrite: bool = False) -> int:
-        """原子写出 TIFF；失败仅清除本次临时文件。"""
+                    overwrite: bool = False,
+                    compression: Optional[str] = None) -> int:
+        """原子写出 TIFF；失败仅清除本次临时文件。
+
+        Args:
+            compression: ``None``/"none"（默认，未压缩，与历史行为逐位一致）
+                或 "deflate"（zlib 无损）。压缩只改变容器编码，不改变像素值；
+                压缩时不能使用 contiguous 写入（tifffile 明确拒绝二者同用），
+                因此改为逐页写出。其余安全检查（同源拒绝、已有目标拒绝、
+                磁盘/大文件容器策略、帧数/形状/类型校验、临时文件清理后发布）
+                对两种编码完全一致。
+        """
+        if compression not in (None, "none", "deflate"):
+            raise ValueError(
+                f"不支持的 compression: {compression!r}（可选 None/'none'/'deflate'）")
+        compress = compression == "deflate"
         target = Path(filepath)
         source_value = meta.get("source_path")
         source = Path(source_value).resolve() if source_value else None
@@ -461,6 +475,10 @@ class TiffIO:
                             f"第 {index} 帧形状或类型不一致：{page.shape}/{page.dtype}，"
                             f"期望 {expected_shape}/{expected_dtype}")
                     kwargs = {"photometric": "minisblack", "metadata": None, "contiguous": True}
+                    if compress:
+                        # 压缩与 contiguous 互斥；改为逐页写，其余参数保持一致
+                        kwargs = {"photometric": "minisblack", "metadata": None,
+                                  "compression": "deflate"}
                     if index == 0:
                         if description:
                             kwargs["description"] = description
@@ -932,7 +950,8 @@ class DriftCorrector:
 def correct_and_save(frames: list[np.ndarray], shifts_x, shifts_y, meta: dict, output_path: str,
                      progress_callback=None, cancel_event=None, overwrite: bool = False,
                      crop_mode: str = "crop",
-                     verify_info: Optional[dict] = None) -> Optional[int]:
+                     verify_info: Optional[dict] = None,
+                     compression: Optional[str] = None) -> Optional[int]:
     """矫正后原子保存。默认裁剪到所有帧的共同有效区域。
 
     对位移最大的帧执行像素级防空转校验：若位移明显非零，但所谓矫正帧与
@@ -942,6 +961,9 @@ def correct_and_save(frames: list[np.ndarray], shifts_x, shifts_y, meta: dict, o
     Args:
         verify_info: 可选出参。保存后回填 ``{"crop", "verify_index",
             "changed_ratio"}`` 供审计报告使用；未执行生效校验时后两项为 None。
+        compression: ``None``/"none"（默认，未压缩，与历史行为一致）或
+            "deflate"。仅调整编码与 contiguous，不改变校正算法、裁剪、
+            生效校验或任何安全检查（见 :meth:`TiffIO.write_stack`）。
     """
     if not frames:
         raise ValueError("没有待保存的帧")
@@ -1003,6 +1025,7 @@ def correct_and_save(frames: list[np.ndarray], shifts_x, shifts_y, meta: dict, o
             verified_frames(),
             output_meta, progress_callback=progress_callback, cancel_event=cancel_event,
             overwrite=overwrite,
+            compression=compression,
         )
         if verify_required and not verified:
             raise ValueError("矫正生效校验未执行，拒绝报告保存成功")

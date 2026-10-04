@@ -45,6 +45,16 @@ from .mplbackend import backend_locked
 
 logger = logging.getLogger(__name__)
 
+
+class _PathMarker(str):
+    """注入 ``sys.path`` 的唯一标记：值同普通路径字符串，身份唯一。
+
+    用于在退出上下文时精确识别"本上下文插入的条目"，见
+    :meth:`ProjectLoader._project_on_path`。
+    """
+
+    __slots__ = ()
+
 # 这些目录明确不是可导入模块，不参与顶层名字记账。
 # 注意不要把 tools/scripts/diagnostics/processing 之类列进来 ——
 # 它们在部分项目中确实是真实的包（如 4D-STEM 的 processing/、diagnostics/）。
@@ -132,16 +142,32 @@ class ProjectLoader:
     # ------------------------------------------------------------------
     @contextlib.contextmanager
     def _project_on_path(self, project_dir: Path, extra_paths: tuple[Path, ...] = ()) -> Iterator[None]:
-        """临时把项目目录置于 ``sys.path`` 最前，退出时精确还原。"""
-        injected = [str(project_dir), *(str(p) for p in extra_paths)]
-        for p in reversed(injected):
-            sys.path.insert(0, p)
+        """临时把项目目录置于 ``sys.path`` 最前，退出时精确还原。
+
+        算法：为本次注入的每个条目创建一个**唯一标记对象**（``str`` 子类实例）
+        放进 ``sys.path``，退出时只删除**身份相同**的那些条目。
+
+        为什么需要标记：``str(path)`` 有缓存，同一 ``Path`` 对象多次转换可能返回
+        **同一个 str 对象**（实测如此），因此不能假定"每次 str 调用产生独立对象"，
+        按值 ``remove`` 或按对象身份匹配普通 str 都可能误删上下文之外的同值条目
+        （外部插入、进入前就存在、嵌套内层）。
+
+        ``str`` 子类对导入系统完全等价于 ``str``（不改变路径解析语义），且身份
+        唯一，因此"只删除本上下文自己的项"可被证明。嵌套与异常路径同样成立：
+        每层上下文有自己的标记对象，互不影响。
+        """
+        markers = [_PathMarker(str(project_dir))]
+        markers.extend(_PathMarker(str(p)) for p in extra_paths)
+        for marker in reversed(markers):
+            sys.path.insert(0, marker)
         try:
             yield
         finally:
-            for p in injected:
-                with contextlib.suppress(ValueError):
-                    sys.path.remove(p)
+            for marker in markers:
+                for index, existing in enumerate(sys.path):
+                    if existing is marker:
+                        del sys.path[index]
+                        break
 
     # ------------------------------------------------------------------
     def load_module(

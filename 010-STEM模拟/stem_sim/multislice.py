@@ -16,6 +16,8 @@ Cowley-Moody Multislice 算法（SimulaTEM 核心计算逻辑的 Python 实现�
 
 from __future__ import annotations
 
+import math
+import numbers
 import warnings
 from dataclasses import dataclass
 from typing import Iterator, List, NamedTuple, Optional, Tuple
@@ -121,26 +123,77 @@ def _grid_size(length: float, sampling: Optional[float], gpts: Optional[int]) ->
     return max(32, int(round(length / sampling)))
 
 
+def _grid_size_value(value, name: str) -> int:
+    """把一个 gpts 分量解析成正整数，非法输入给出明确 ValueError。
+
+    被接受：Python ``int``、``numpy`` 整数类型，以及**整数值**的浮点数
+    （``32.0`` 视为 32，已在文档中声明）。
+
+    被拒绝：``bool``（``True`` 曾静默变成 1）、非整数值（``24.5`` 曾静默截断为
+    24）、非有限值（``inf``/``nan``）、非数值类型、非正数。
+
+    此前直接 ``int(gpts)``，上述非法输入会被静默接受并改变网格尺寸，
+    与"非法输入清晰报错"的声明不符（回归 2026-10-03 R8）。
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"{name} 必须是正整数，不接受布尔值 {value!r}。")
+    if isinstance(value, numbers.Integral):
+        size = int(value)
+    elif isinstance(value, numbers.Real):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{name} 必须是有限正整数，当前为 {value!r}。")
+        if number != int(number):
+            raise ValueError(
+                f"{name} 必须是整数，当前为 {value!r}（不接受小数，"
+                "以免静默截断改变网格尺寸）。"
+            )
+        size = int(number)
+    else:
+        raise ValueError(
+            f"{name} 必须是正整数，当前为 {value!r}（类型 {type(value).__name__}）。"
+        )
+    if size <= 0:
+        raise ValueError(f"{name} 必须为正整数，当前为 {size}。")
+    return size
+
+
 def _grid_shape(
     lx: float, ly: float, sampling: Optional[float], gpts
 ) -> Tuple[int, int]:
     """确定网格形状 (ny, nx)。
 
     gpts 可为 None（按 sampling 自动）、标量（两轴相同，对应 SimulaTEM 的
-    256/512/1024 档）或 (ny, nx) 二元组——STEM 扫描需要后者：x/y 周期
+    256/512/1024 档）或 ``(ny, nx)`` 二元组——STEM 扫描需要后者：x/y 周期
     （Lx、Ly）一般不相等，两轴必须各自向上取到 FFT 友好的点数，
     才能同时满足目标采样且不浪费网格。
+
+    二元组的维度顺序是 **(ny, nx)**（先行数后列数），与返回值和
+    ``phase`` 数组的 ``shape`` 一致。
+
+    ``gpts`` 分量接受 Python ``int``、``numpy`` 整数类型与**整数值**浮点数
+    （``32.0`` == 32）；``bool``、小数、``inf``/``nan`` 一律拒绝，
+    不静默截断或转换。
+
+    Raises:
+        ValueError: 二元组长度不是 2，或任一分量不是正整数值。
     """
     if gpts is None:
         if sampling is None:
             sampling = 0.05
         return (max(32, int(round(ly / sampling))),
                 max(32, int(round(lx / sampling))))
-    try:
-        ny, nx = int(gpts[0]), int(gpts[1])
-    except (TypeError, IndexError):
-        return int(gpts), int(gpts)
-    return ny, nx
+
+    if isinstance(gpts, (tuple, list)):
+        if len(gpts) != 2:
+            raise ValueError(
+                f"gpts 为序列时必须是 (ny, nx) 二元组，当前长度为 {len(gpts)}。"
+            )
+        return (_grid_size_value(gpts[0], "gpts 的 ny"),
+                _grid_size_value(gpts[1], "gpts 的 nx"))
+
+    size = _grid_size_value(gpts, "gpts 标量")
+    return size, size
 
 
 def _fresnel_propagator(
@@ -344,12 +397,14 @@ def _build_slice_transmissions_shape(
     kernel_cutoff: float = _DEFAULT_KERNEL_CUTOFF,
     table: str = "peng",
 ) -> Tuple[List[np.ndarray], Tuple[float, float], Tuple[float, float, float]]:
-    """build_slice_transmissions 的 (ny, nx) 网格版本（stem_scan 专用，见上）。"""
-    plan = _plan_slices_shape(
+    """矩形网格透射函数的兼容别名（等价于 ``build_slice_transmissions``）。
+
+    保留该私有名以兼容既有调用方与测试；公开函数自 2026-10-03 R8 起已支持
+    ``gpts=(ny, nx)``，两者是同一条代码路径，结果逐位一致。
+    """
+    return build_slice_transmissions(
         structure, scope, sampling, gpts, slice_thickness, padding, kernel_cutoff, table
     )
-    transmissions = list(_iter_slice_transmissions(plan))
-    return transmissions, (plan.sx, plan.sy), (plan.lx, plan.ly, plan.lz)
 
 
 def build_slice_transmissions(
@@ -366,6 +421,12 @@ def build_slice_transmissions(
 
     Parameters
     ----------
+    sampling : float, 可选
+        目标采样间隔 Å/px（与 gpts 二选一）。
+    gpts : None | int | (ny, nx), 可选
+        网格点数。``None`` 按 sampling 自动；标量表示两轴相同；
+        ``(ny, nx)`` 二元组让两轴各自独立（x/y 周期不等时必需），
+        维度顺序为 **(ny, nx)**。
     table : str
         散射因子表："peng"（默认，物理标准）或 "gauss3"（SimulaTEM legacy，
         仅用于复现旧口径）。
@@ -381,8 +442,13 @@ def build_slice_transmissions(
     本函数一次性物化全部切片，内存 O(n_slices·N²)，仅供 STEM 扫描等需要
     反复遍历透射函数的场景使用；普通 HRTEM 模拟请直接调用 multislice /
     multislice_series（内部逐切片惰性生成，内存 O(N²)，结果逐位一致）。
+
+    矩形网格（``gpts=(ny, nx)``）走 :func:`_plan_slices_shape`，与
+    :func:`_build_slice_transmissions_shape` 是同一条代码路径 —— 后者保留为
+    兼容名，二者结果逐位一致（回归 2026-10-03 R8：此前公开函数只支持标量
+    网格，STEM 扫描需要的矩形网格只能走私有入口）。
     """
-    plan = _plan_slices(
+    plan = _plan_slices_shape(
         structure, scope, sampling, gpts, slice_thickness, padding, kernel_cutoff, table
     )
     transmissions = list(_iter_slice_transmissions(plan))

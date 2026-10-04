@@ -25,6 +25,18 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 vendor_hidden = (collect_submodules('setuptools._vendor')
                  + collect_submodules('pkg_resources._vendor'))
 
+# 各工具源码不打包、运行时才从工作区加载，PyInstaller 的静态分析看不到它们
+# 的 import。手写 hiddenimports 只能覆盖已知项，工具的**延迟导入**（点击按钮
+# 后才执行，如 scipy.optimize / skimage.segmentation / ncempy.io.dm）会漏。
+# 因此对这类"工具实际会用到"的库整体收集子模块（回归 2026-09-29 审查项，
+# 2026-10-03 R3 裁决采纳主源码实现）。
+tool_hidden: list[str] = []
+for _pkg in ("scipy", "skimage", "ncempy", "PIL", "imagecodecs", "tifffile"):
+    try:
+        tool_hidden += collect_submodules(_pkg)
+    except Exception:
+        pass  # 该库未安装时跳过，由 requirements 负责保证完整性
+
 # ttkbootstrap 2.x 把主题所需的字体与图标放在包内 assets/ 下，
 # 且没有官方 PyInstaller hook。缺失时 Window() 初始化即抛
 # FileNotFoundError: ttkbootstrap/assets/icons/bootstrap.ttf
@@ -84,7 +96,7 @@ a = Analysis(
         'tkinter.ttk',
         # stem-optimize worker.py 运行期才 import（拖拽文件路径解析）
         'ctypes.wintypes',
-    ] + vendor_hidden,
+    ] + vendor_hidden + tool_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -115,7 +127,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # upx 对 cv2 / tbb / OpenBLAS 等原生 DLL 有损坏风险（曾导致运行时
+    # 加载失败），故关闭（回归 2026-09-29 审查项；2026-10-03 R3 裁决采纳）。
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

@@ -1,218 +1,249 @@
 # -*- coding: utf-8 -*-
-"""Run each project's own test suite inside its freshly provisioned venv.
+"""Run each project's own declared test command in that project's own venv.
 
-pytest is a *dev* dependency and is absent from most runtime locks, so it is
-installed temporarily. Afterwards the venv is restored to the exact package set
-it had before -- leaving stray transitive dependencies behind (Pygments,
-pluggy, ...) would silently break lock fidelity, and uninstalling pytest
-outright would break projects whose requirements legitimately include it.
-
-Audit 127: the project list below must stay identical to the ``dir`` entries of
-the ``test`` matrix in ``.github/workflows/ci.yml``. CI guards this invariant
-with ``python .tools/verify-envs.py --check-matrix .github/workflows/ci.yml``
-(pure stdlib text comparison, no venv/subprocess involved).
+What changed (reconcile round, R7)
+----------------------------------
+* Project list, venv name, Python range, install source and test command all come
+  from ``.tools/projects.json`` — the same manifest ``provision-envs.py`` reads.
+  The old failure mode (provision ``.venv``, then test a non-existent
+  ``.venv-build``) is now structurally impossible, and the guard below catches it
+  if anyone reintroduces the mismatch.
+* This script **never installs or uninstalls anything**. A missing package, a
+  missing venv, a broken interpreter or a timeout is reported as a non-pass, with
+  an actionable hint, instead of being papered over with a temporary pip install.
+* ``--project`` / ``--dry-run`` support分批执行, and the exit code is non-zero
+  unless every selected command genuinely passed. SKIP is never counted as pass.
 
 Usage::
 
-    python .tools/verify-envs.py                    # run every project's tests
-    python .tools/verify-envs.py --check-matrix [path-to-ci.yml]
+    python .tools/verify-envs.py --list
+    python .tools/verify-envs.py --dry-run
+    python .tools/verify-envs.py --project 全整合
+    python .tools/verify-envs.py --json results.json
+    python .tools/verify-envs.py --check-matrix [.github/workflows/ci.yml]
 """
 from __future__ import annotations
 
-import re
-import subprocess
+import argparse
 import sys
-import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
-BOOTSTRAP = {"pip", "setuptools", "wheel"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# project dir, venv, command (None -> pytest), label
-# 审计 127：与 .github/workflows/ci.yml test 矩阵的 19 个 dir 一一对应；
-# 由 --check-matrix 在 CI 守门，改任一侧须同步另一侧。
-JOBS = [
-    (r"02-图像处理\hrtem-HRTEM滤波工具", ".venv", None, "pytest"),
-    (r"02-图像处理\图像加滤镜工具", ".venv", None, "pytest"),
-    (r"03-应变分析\strainpp-GPA应变分析", ".venv", None, "pytest"),
-    (r"03-应变分析\原子级应力分析-PPA", ".venv", None, "pytest"),
-    (r"03-应变分析\原子识别纯算法", ".venv", None, "pytest"),
-    (r"03-应变分析\原子中心识别模型开发", ".venv", None, "pytest"),
-    (r"04-统计分析\原子衬度统计", ".venv", None, "pytest"),
-    (r"04-统计分析\特征区域演化分析", ".venv", None, "pytest"),
-    (r"04-统计分析\统计面积", ".venv", None, "pytest"),
-    (r"04-统计分析\非晶面积统计", ".venv", None, "pytest"),
-    (r"05-4D-STEM分析\4D-STEM-Processor", ".venv", None, "pytest"),
-    (r"05-EELS分析\EELS边缘价态分析工具", ".venv", None, "pytest"),
-    (r"01-视频与数据提取\视频切片工具", ".venv", None, "pytest"),
-    (r"02-图像处理\drift-correction-v7", ".venv-build", None, "pytest"),
-    (r"02-图像处理\stem-optimize-STEM图像优化", ".venv-build", None, "pytest"),
-    (r"02-图像处理\离域效应去除工具", ".venv-build", None, "pytest"),
-    (r"09-HRTEM模拟", ".venv", ["tests/verify_physics.py"], "verify_physics"),
-    (r"010-STEM模拟", ".venv", ["tests/verify_physics.py"], "verify_physics"),
-    # the suite ships a standalone smoke script, not pytest tests
-    (r"全整合", ".venv", ["tests/smoke_test.py"], "smoke_test"),
-]
+import _envcommon as ec  # noqa: E402
+
+PASS = "PASS"
+FAIL = "FAIL"
+SKIP = "SKIP"
+ERROR = "ERROR"
+
+CORE_IMPORTS = {
+    "numpy": "numpy", "scipy": "scipy", "matplotlib": "matplotlib",
+    "pandas": "pandas", "tifffile": "tifffile", "PIL": "PIL", "cv2": "cv2",
+    "skimage": "skimage", "ase": "ase", "pyfftw": "pyfftw",
+    "ncempy": "ncempy", "ttkbootstrap": "ttkbootstrap",
+    "imagecodecs": "imagecodecs", "openpyxl": "openpyxl", "seaborn": "seaborn",
+    "defusedxml": "defusedxml", "tkinterdnd2": "tkinterdnd2",
+    "imageio_ffmpeg": "imageio_ffmpeg",
+}
 
 
-def run(cmd, cwd=None, timeout=1200):
-    try:
-        return subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return None
+def quick_import_check(py: Path, proj: Path, modules: list[str]) -> tuple[bool, str]:
+    if not modules:
+        return True, ""
+    code = ("import importlib,sys\n"
+            "bad=[]\n"
+            f"for m in {modules!r}:\n"
+            "    try: importlib.import_module(m)\n"
+            "    except Exception as e: bad.append(m+':'+type(e).__name__)\n"
+            "print('BAD=' + ','.join(bad) if bad else 'OK')\n")
+    res = ec.run([py, "-c", code], cwd=proj, timeout=300)
+    if not res.ok:
+        return False, f"import probe failed (exit {res.code}): {res.out.strip()[-200:]}"
+    verdict = res.out.strip().splitlines()[-1] if res.out.strip() else "?"
+    return verdict == "OK", verdict
 
 
-def has_module(py: Path, mod: str) -> bool:
-    # 审计 65：run() 超时返回 None；此前直接 .returncode 会 AttributeError。
-    # 超时按「模块不可用」处理，让上层走安全的降级分支。
-    r = run([str(py), "-c", f"import {mod}"], timeout=120)
-    return r is not None and r.returncode == 0
+def pip_install_hint(py: Path, proj: Path) -> str:
+    return (f'& "{py}" -X utf8 -m pip install -r requirements.lock.txt   '
+            f'(cwd {proj}); 或用 .tools/provision-envs.py --project '
+            f'"{proj.name}" --with-tests')
 
 
-def snapshot(py: Path) -> set[str] | None:
-    """Exact installed package set, so the venv can be restored afterwards.
+def run_one(entry: dict, manifest: dict, results: list, dry_run: bool,
+            log_path=None) -> None:
+    proj = ec.project_dir(entry)
+    venv_name = (entry.get("test") or {}).get("venv") or entry["venv"]
+    py = ec.venv_python(entry, venv_name)
 
-    审计 65：pip freeze 超时返回 None。不能返回空集合充当「快照」——那会让
-    restore() 把整个 site-packages 当作多余物全部卸掉；调用方必须判 None。
-    """
-    r = run([str(py), "-m", "pip", "freeze"], timeout=180)
-    if r is None:
-        return None
-    return {
-        l.strip() for l in r.stdout.splitlines()
-        if l.strip() and not l.startswith("#")
-        and re.split(r"[=<>\s]", l.strip(), 1)[0].lower() not in BOOTSTRAP
-    }
-
-
-def restore(py: Path, before: set[str]) -> None:
-    """Drop what we added and re-add anything we removed."""
-    after = snapshot(py)
-    if after is None:
-        # 审计 65：拿不到当前快照就无法安全 diff；宁可不动作也不把 venv 卸空
-        print(f"    warn  pip freeze timed out in {py}; venv left untouched")
+    if not proj.is_dir():
+        results.append({"project": entry["name"], "dir": entry["dir"], "label": "-",
+                        "status": ERROR, "detail": f"project dir missing: {proj}"})
         return
-    extra = sorted(after - before)
-    missing = sorted(before - after)
-    if extra:
-        names = [re.split(r"[=<>\s]", e, 1)[0] for e in extra]
-        run([str(py), "-m", "pip", "uninstall", "-y", "-q", *names], timeout=300)
-    if missing:
-        run([str(py), "-m", "pip", "install", "-q",
-             "--disable-pip-version-check", "-i", MIRROR, *missing], timeout=900)
 
+    if not entry.get("tests"):
+        results.append({"project": entry["name"], "dir": entry["dir"], "label": "-",
+                        "status": SKIP,
+                        "detail": "no test command declared in the manifest "
+                                  "(adapter project; not a pass)"})
+        return
 
-def load_provision_dirs() -> set[str]:
-    """Directory set of .tools/provision-envs.py JOBS (module import is
-    side-effect free: its top level only defines constants and functions)."""
-    import importlib.util
-    path = Path(__file__).with_name("provision-envs.py")
-    spec = importlib.util.spec_from_file_location("provision_envs", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return {str(rel).replace("\\", "/") for _, rel, *_ in mod.JOBS}
+    info = ec.interpreter_info(py)
+    modules = [CORE_IMPORTS[m] for m in (entry.get("verify_imports") or [])
+               if m in CORE_IMPORTS]
+    if not info["runs"]:
+        detail = (f"interpreter not runnable: {info.get('error')}; "
+                  f"provision it first: python .tools/provision-envs.py "
+                  f'--project "{entry["name"]}"')
+        results.append({"project": entry["name"], "dir": entry["dir"], "label": "-",
+                        "status": SKIP, "detail": detail,
+                        "interpreter": str(py)})
+        return
 
+    pmin = entry.get("python", {}).get("min")
+    pmax = entry.get("python", {}).get("max")
+    version = ec.parse_version(info["version"])
+    if not ec.satisfies(version, pmin, pmax):
+        results.append({
+            "project": entry["name"], "dir": entry["dir"], "label": "-",
+            "status": ERROR, "interpreter": str(py), "version": info["version"],
+            "detail": f"interpreter {info['version']} outside declared range "
+                      f"[{pmin or '-'}, {pmax or '-'})"})
+        return
 
-def check_matrix(ci_path: Path) -> int:
-    """审计 127：ci.yml test 矩阵必须与 .tools 清单收敛为单一来源。
+    if modules:
+        ok, verdict = quick_import_check(py, proj, modules)
+        if not ok:
+            results.append({
+                "project": entry["name"], "dir": entry["dir"], "label": "imports",
+                "status": FAIL, "interpreter": str(py),
+                "detail": f"declared imports unavailable: {verdict}. "
+                          + pip_install_hint(py, proj)})
+            return
 
-    约束：verify-envs JOBS 的目录集合 == 矩阵的 dir 集合；矩阵每个 dir 都
-    必须出现在 provision-envs JOBS（后者可以更广，如无测试的 10-DSH集成）。
-    纯文本比对，无任何 venv/子进程操作。
-    """
-    if not ci_path.is_file():
-        print(f"ci.yml not found: {ci_path}")
-        return 2
-    matrix = sorted(set(re.findall(r"dir:\s*'([^']+)'", ci_path.read_text(encoding="utf-8"))))
-    jobs = sorted({rel.replace("\\", "/") for rel, *_ in JOBS})
-    provision = load_provision_dirs()
-    ok = True
-    for tag, extra in (
-        ("dir only in ci.yml matrix", set(matrix) - set(jobs)),
-        ("dir only in verify-envs JOBS", set(jobs) - set(matrix)),
-    ):
-        for d in sorted(extra):
-            ok = False
-            print(f"MISMATCH {tag}: {d}")
-    for d in sorted(set(matrix) - provision):
-        ok = False
-        print(f"MISMATCH dir missing from provision-envs JOBS: {d}")
-    if ok:
-        print(f"ci.yml matrix <-> .tools JOBS aligned: {len(matrix)} projects")
-        return 0
-    return 1
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if "--check-matrix" in args:
-        i = args.index("--check-matrix")
-        if i + 1 < len(args):
-            return check_matrix(ROOT / args[i + 1])
-        return check_matrix(ROOT / ".github" / "workflows" / "ci.yml")
-    if args:
-        print(f"unknown arguments: {' '.join(args)} "
-              "(supported: --check-matrix [ci.yml path])")
-        return 2
-
-    print(f"workspace: {ROOT}")
-    print("=" * 78)
-    rows = []
-    for rel, venv, cmd, label in JOBS:
-        proj = ROOT / rel
-        py = proj / venv / "Scripts" / "python.exe"
-        if not py.is_file():
-            rows.append((rel, label, "NO VENV", ""))
-            print(f"[SKIP] {rel:<40} no venv")
+    for spec in entry["tests"]:
+        label = spec.get("label") or "test"
+        argv = [str(py), "-X", "utf8", *[str(a) for a in spec.get("argv") or []]]
+        if not spec.get("argv"):
+            results.append({"project": entry["name"], "dir": entry["dir"],
+                            "label": label, "status": ERROR,
+                            "detail": "empty test argv in manifest"})
             continue
-
-        before = snapshot(py)
-        if before is None:
-            # 审计 65：pip freeze 超时——记为失败跳过该 job，而不是在
-            # restore() 时把 venv 卸空
-            rows.append((rel, label, "TIMEOUT", "pip freeze"))
-            print(f"[TIME] {rel:<40} {label} pip freeze timed out")
+        if dry_run:
+            results.append({"project": entry["name"], "dir": entry["dir"],
+                            "label": label, "status": "PLANNED",
+                            "cmd": argv, "interpreter": str(py)})
             continue
-        if cmd is None and not has_module(py, "pytest"):
-            r = run([str(py), "-X", "utf8", "-m", "pip", "install", "-q",
-                     "--disable-pip-version-check", "-i", MIRROR, "pytest"])
-            if r is None or r.returncode != 0:
-                rows.append((rel, label, "NO PYTEST", ""))
-                print(f"[SKIP] {rel:<40} could not install pytest")
-                continue
-
-        argv = [str(py), "-X", "utf8", "-m", "pytest", "-q"] if cmd is None \
-            else [str(py), "-X", "utf8", *cmd]
-        t0 = time.time()
-        r = run(argv, cwd=proj)
-        dur = time.time() - t0
-
-        restore(py, before)
-
-        if r is None:
-            rows.append((rel, label, "TIMEOUT", f"{dur:.0f}s"))
-            print(f"[TIME] {rel:<40} {label} timed out after {dur:.0f}s")
-            continue
-
+        res = ec.run(argv, cwd=proj, timeout=1800, log_path=log_path)
         summary = ""
-        for line in reversed([l for l in r.stdout.splitlines() if l.strip()]):
-            if re.search(r"(\d+ (passed|failed|error)|通过|OK\b)", line):
-                summary = line.strip()[:64]
+        for line in reversed([l for l in res.out.splitlines() if l.strip()]):
+            if ("passed" in line or "failed" in line or "error" in line
+                    or line.strip().startswith(("OK", "FAIL", "PASS"))):
+                summary = line.strip()[:120]
                 break
-        status = "PASS" if r.returncode == 0 else "FAIL"
-        rows.append((rel, label, status, summary))
-        print(f"[{status}] {rel:<40} {label:<14} {dur:5.0f}s  {summary}")
+        if res.timed_out:
+            status, detail = FAIL, f"timeout: {res.out.strip()[-200:]}"
+        elif res.ok:
+            status, detail = PASS, summary or "exit 0"
+        else:
+            status, detail = FAIL, (f"exit {res.code}: "
+                                    + (summary or res.out.strip()[-300:]))
+        results.append({
+            "project": entry["name"], "dir": entry["dir"], "label": label,
+            "status": status, "detail": detail, "cmd": argv,
+            "exit": res.code, "interpreter": str(py),
+            "tail": res.out[-4000:],
+        })
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Run each project's declared tests.")
+    ap.add_argument("--project", action="append", default=None,
+                    help="project name or dir (repeatable); default: all")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="show what would run (plus venv/import readiness)")
+    ap.add_argument("--check-matrix", nargs="?", const="", default=None,
+                    metavar="CI_YML",
+                    help="compare the manifest-derived CI matrix with ci.yml")
+    ap.add_argument("--manifest", default=None,
+                    help="use this projects.json instead of .tools/projects.json")
+    ap.add_argument("--log", default=None,
+                    help="append the full stdout/stderr of every command here")
+    ap.add_argument("--json", default=None)
+    args = ap.parse_args(argv)
+
+    manifest = ec.load_manifest(Path(args.manifest) if args.manifest else None)
+
+    if args.check_matrix is not None:
+        ci_path = Path(args.check_matrix) if args.check_matrix else \
+            ec.active_root() / ".github" / "workflows" / "ci.yml"
+        ok, messages = ec.check_ci_matrix(manifest, ci_path)
+        default_manifest = ec.default_py_from_manifest(manifest)
+        default_ci = ec.default_py_from_ci(ci_path)
+        if default_ci and default_manifest != default_ci:
+            ok = False
+            messages.append(f"default python-version differs "
+                            f"(manifest={default_manifest}, ci.yml={default_ci})")
+        for m in messages:
+            print(f"MISMATCH {m}")
+        if ok:
+            rows = ec.derive_ci_rows(manifest)
+            print(f"manifest <-> ci.yml matrix aligned: {len(rows)} projects")
+            print("compared: matrix identity/version fields (name, dir, py, ffmpeg), "
+                  "each project's install source + lock presence + test venv + test "
+                  "scripts, the CI install/test lifecycle steps, and the ban on raw "
+                  "pip installs that would bypass a lock")
+        return 0 if ok else 1
+
+    try:
+        entries = ec.find_projects(manifest, args.project)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
+    if args.list:
+        for entry in entries:
+            tests = ", ".join(s.get("label", "?") for s in entry.get("tests") or []) or "-"
+            print(f"{entry['name']:<28} {entry['dir']:<40} "
+                  f"venv={(entry.get('test') or {}).get('venv') or entry['venv']:<10} "
+                  f"tests={tests}")
+        return 0
+
+    print(f"repo root: {ec.active_root()}")
+    print("=" * 78)
+    log_path = Path(args.log) if args.log else None
+    results: list = []
+    for entry in entries:
+        run_one(entry, manifest, results, args.dry_run, log_path)
+
+    counts: dict[str, int] = {}
+    for row in results:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    for row in results:
+        detail = row.get("detail") or ("would run: "
+                                       + "; ".join(row.get("test_commands") or [])
+                                       or row["status"])
+        print(f"[{row['status']:<7}] {row['project']:<28} {row['label']:<14} "
+              f"{detail[:90]}")
 
     print("=" * 78)
-    bad = [r for r in rows if r[2] != "PASS"]
-    print(f"passed {len(rows) - len(bad)} / {len(rows)}")
-    for rel, label, status, summary in bad:
-        print(f"  {status:<9} {rel}  {summary}")
-    return 1 if bad else 0
+    print("summary: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    not_pass = [r for r in results if r["status"] not in (PASS, "PLANNED")]
+    for row in not_pass:
+        detail = row.get("detail") or row["status"]
+        print(f"  {row['status']:<7} {row['project']} / {row['label']}: "
+              f"{detail[:160]}")
+    print(f"passed {counts.get(PASS, 0)} / {len(results)}"
+          + ("  (SKIP is not a pass)" if counts.get(SKIP) else ""))
+    if args.json:
+        ec.write_json(Path(args.json), {
+            "stage": "verify", "dry_run": args.dry_run, "counts": counts,
+            "results": results,
+        })
+    if args.dry_run:
+        return 0 if not any(r["status"] == ERROR for r in results) else 1
+    return 0 if (results and not not_pass) else 1
 
 
 if __name__ == "__main__":

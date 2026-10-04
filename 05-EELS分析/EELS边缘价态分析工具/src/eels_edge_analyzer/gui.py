@@ -6,6 +6,7 @@ TEM Suite 的 ToolHost 内嵌到标签页。
 
 from __future__ import annotations
 
+import math
 import os
 import queue
 import threading
@@ -60,6 +61,9 @@ class EELSEdgeAnalyzerApp:
         # 用 StringVar 而不是 IntVar：IntVar.get() 在输入框为空或非整数时抛出
         # TclError，会绕过 _start 的统一错误处理；字符串解析能给出正常报错。
         self.bootstrap_var = tk.StringVar(value="500")
+        # 沿表面分段宽度：留空表示"交给预设"，非空表示显式指定（R5）。
+        # 刻意不给数值默认值——否则勾选预设时也会被界面默认值覆盖。
+        self.segment_nm_var = tk.StringVar()
         self.sensitivity_var = tk.BooleanVar(value=True)
         self.injection_var = tk.BooleanVar(value=True)
         self.survey_index_var = tk.StringVar()
@@ -157,14 +161,30 @@ class EELSEdgeAnalyzerApp:
         ttk.Checkbutton(dataset_box, text="执行参数敏感性分析", variable=self.sensitivity_var).grid(
             row=1, column=4, columnspan=2, sticky="w", pady=(8, 0)
         )
+        # R5：沿表面分段宽度必须可从界面显式给出。此前该值只能来自预设，
+        # 取消预设后没有任何输入口，_make_config 只能抛"必须显式提供"。
+        # 该字段单独占一行（row 2）：初稿把它与"执行 Cu1 注入恢复检验"放在
+        # 同一行的同一列，两个控件在 Tk 网格里互相遮挡（回归 2026-10-03 R5 布局）。
+        ttk.Label(dataset_box, text="沿表面分段宽度 (nm)：").grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
+        ttk.Entry(dataset_box, textvariable=self.segment_nm_var, width=10).grid(
+            row=2, column=1, sticky="w", padx=(3, 12), pady=(8, 0)
+        )
+        ttk.Label(
+            dataset_box,
+            text="留空采用参数预设的值；填写则覆盖预设；未启用预设时必须填写。",
+            foreground="gray",
+        ).grid(row=2, column=2, columnspan=4, sticky="w", pady=(8, 0))
+        # 原 row 2 的内容整体下移到 row 3，避免与分段宽度字段同格遮挡。
         ttk.Checkbutton(dataset_box, text="执行 Cu1 注入恢复检验", variable=self.injection_var).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(8, 0)
+            row=3, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
         ttk.Label(
             dataset_box,
             text="提示：自动边缘应在运行后查看 registered_surface_boundary.png；若方向不对，请改为 top/bottom/left/right 重跑。",
             foreground="gray",
-        ).grid(row=2, column=3, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=3, column=3, columnspan=3, sticky="w", pady=(8, 0))
 
         detail_box = ttk.LabelFrame(main, text="DM4 检查结果", padding=8)
         detail_box.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
@@ -315,6 +335,26 @@ class EELSEdgeAnalyzerApp:
             return None
         return self._parse_int_field(text, field_name)
 
+    def _optional_positive_float(self, value: str, field_name: str) -> float | None:
+        """解析可选的有限正浮点字段；空字符串表示"未指定"（R5）。
+
+        NaN/Inf 必须显式拒绝：``float("nan")`` 能解析成功，但会静默传播进
+        距离分层计算，使分段宽度全部变成 NaN 而不报错。
+        """
+
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise ValueError(f"{field_name}必须是数值，当前为“{text}”。") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{field_name}必须是有限数值，当前为“{text}”。")
+        if number <= 0:
+            raise ValueError(f"{field_name}必须大于零，当前为 {number:g}。")
+        return number
+
     def _make_config(self) -> AnalysisConfig:
         input_text = self.input_var.get().strip()
         if not input_text:
@@ -349,6 +389,13 @@ class EELSEdgeAnalyzerApp:
         else:
             overrides = dict(load_preset(Path(preset_text)) if preset_text else load_preset())
         config_kwargs: dict[str, Any] = dict(overrides)
+        # R5：沿表面分段宽度——非空的显式输入优先于预设；留空才用预设值。
+        # 取消预设且留空时，validate() 会给出"必须显式提供"的明确提示。
+        segment_nm = self._optional_positive_float(
+            self.segment_nm_var.get(), "沿表面分段宽度 (nm)"
+        )
+        if segment_nm is not None:
+            config_kwargs["along_surface_segment_nm"] = segment_nm
         config_kwargs.update(
             input_path=source,
             output_dir=output,

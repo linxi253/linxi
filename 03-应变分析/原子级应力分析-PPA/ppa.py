@@ -99,6 +99,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from ppa_core import (
     AnalysisError,
     ImageLoadError,
+    LATTICE_CONDITION_GUIDANCE,
     ProjectValidationError,
     compute_cst_strain,
     compute_local_peak_pair_strain,
@@ -106,6 +107,7 @@ from ppa_core import (
     load_analysis_image,
     load_project as load_versioned_project,
     save_project as save_versioned_project,
+    validate_max_condition,
     validate_reference_lattice,
 )
 
@@ -424,16 +426,24 @@ def infer_atom_chain_from_anchors(all_points, anchor_indices, *, label="原子�
     return ordered.astype(np.int64, copy=False)
 
 
-def estimate_reference_vectors_from_chains(a_points, b_points, *, min_points=3):
-    """Estimate and validate two reference vectors from two ordered atom chains."""
+def estimate_reference_vectors_from_chains(a_points, b_points, *, min_points=3,
+                                           max_condition=None):
+    """Estimate and validate two reference vectors from two ordered atom chains.
+
+    ``max_condition`` 由调用方传入，保证与用户在界面上配置的阈值一致；
+    ``None`` 保持历史默认（30.0）。
+    """
     a_fit = fit_lattice_vector_from_chain(a_points, label="a 方向原子列", min_points=min_points)
     b_fit = fit_lattice_vector_from_chain(b_points, label="b 方向原子列", min_points=min_points)
-    validate_reference_lattice(a_fit.vector, b_fit.vector)
+    if max_condition is None:
+        validate_reference_lattice(a_fit.vector, b_fit.vector)
+    else:
+        validate_reference_lattice(a_fit.vector, b_fit.vector, max_condition=max_condition)
     return a_fit, b_fit
 
 
 def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
-                                   min_atoms=10, max_iter=3):
+                                   min_atoms=10, max_iter=3, max_condition=None):
     """
     仅用「无应变参考区」内的原子精化基矢，不吸收区外的真实应变。
 
@@ -476,7 +486,11 @@ def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
     a_r = np.asarray(a_vec, dtype=np.float64).copy()
     b_r = np.asarray(b_vec, dtype=np.float64).copy()
     try:
-        indices = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+        if max_condition is None:
+            indices = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+        else:
+            indices = assign_unique_lattice_indices(
+                sub, o_r, a_r, b_r, max_condition=max_condition).lattice_indices
     except (AnalysisError, ValueError):
         return origin, a_vec, b_vec, False, n_used
 
@@ -496,7 +510,11 @@ def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
         o_r, a_r, b_r = o_c, a_c, b_c
         applied = True
         try:
-            idx_c = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+            if max_condition is None:
+                idx_c = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+            else:
+                idx_c = assign_unique_lattice_indices(
+                    sub, o_r, a_r, b_r, max_condition=max_condition).lattice_indices
         except (AnalysisError, ValueError):
             break
         if np.array_equal(idx_c, indices):
@@ -523,7 +541,8 @@ class LatticeAssignment:
 
 def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
                                   max_search_radius=4,
-                                  low_confidence_limit=0.45):
+                                  low_confidence_limit=0.45,
+                                  max_condition=None):
     """Assign every accepted atom to a unique integer lattice site.
 
     Independent rounding can map two distinct accepted atoms to the same
@@ -534,6 +553,11 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
     ``low_confidence_limit`` is the maximum allowed residual in either lattice
     coordinate.  A larger residual is reported but never removes or skips the
     atom.
+
+    ``max_condition`` must be threaded in from the caller so the lattice
+    condition-number limit used here matches the one the user configured; the
+    ``None`` default keeps backward compatibility (30.0 via
+    :func:`validate_reference_lattice`).
     """
     raw_points = np.asarray(points, dtype=np.float64)
     if raw_points.ndim != 2 or raw_points.shape[1] != 2:
@@ -545,7 +569,10 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
     b_vec = np.asarray(b_vec, dtype=np.float64)
     if origin.shape != (2,) or a_vec.shape != (2,) or b_vec.shape != (2,):
         raise ValueError("origin, a_vec and b_vec must have shape (2,)")
-    validate_reference_lattice(a_vec, b_vec)
+    if max_condition is None:
+        validate_reference_lattice(a_vec, b_vec)
+    else:
+        validate_reference_lattice(a_vec, b_vec, max_condition=max_condition)
     matrix = np.column_stack((a_vec, b_vec))
     coords = (raw_points - origin) @ np.linalg.inv(matrix).T
     naive = np.rint(coords).astype(int)
@@ -797,6 +824,10 @@ class AtomMarkerApp:
     POINT_MARKER_RADIUS = 7.0   # 原子标记圆半径 (图像像素, 随缩放变化)
     MAX_LABELS_DRAWN = 400      # 编号标签绘制上限 (超出则仅在放大后画视口内的)
     MAX_UNDO_ENTRIES = 500      # 撤销栈上限, 防止超长会话内存无限增长
+    # 参考晶格/局部 PPA 共用的条件数上限默认值。同时作为**类级**默认，
+    # 使不经 __init__ 构造的实例（测试用 __new__）也能解析到与历史一致的 30.0，
+    # 而不是抛 AttributeError。__init__ 会写入同值的实例属性。
+    lattice_max_condition = float(LATTICE_CONDITION_GUIDANCE["general"])
 
     # ---- 检测参数预设 ----
     DETECT_PRESETS = {
@@ -924,6 +955,12 @@ class AtomMarkerApp:
         self.centroid_method = "com" # "com" | "gaussian"
         # 工单27: 最近一次高斯精炼的回退统计 (None 或 {n_points,n_fallback,fallback_ratio})
         self.last_gaussian_refine_stats = None
+        # 参考晶格与局部 PPA 共用的条件数上限。默认取
+        # ppa_core.strain.LATTICE_CONDITION_GUIDANCE["general"]（30.0，与历史行为
+        # 一致）；用户按体系放宽/收紧后，**整条调用链**（参考区精化、晶格索引分配、
+        # 局部应变、参考保存/加载）都必须使用同一取值，否则放宽会被隐藏的默认值
+        # 再次挡下（回归 2026-10-03）。阈值必须是有限正数。
+        self.lattice_max_condition = float(LATTICE_CONDITION_GUIDANCE["general"])
         self._suggested_threshold = None  # 校准模式推算的阈值（临时）
         self.von_mises_coeff = 4.0 / 9.0  # von Mises 系数 (2D 平面应变严格值=4/9; 文献经验值=2/3)
 
@@ -2907,7 +2944,8 @@ class AtomMarkerApp:
             a_points = all_points[a_indices]
             b_points = all_points[b_indices]
             a_fit, b_fit = estimate_reference_vectors_from_chains(
-                a_points, b_points, min_points=2)
+                a_points, b_points, min_points=2,
+                max_condition=self.lattice_max_condition)
             self.ref_multi_auto_indices = [a_indices.tolist(), b_indices.tolist()]
         except (AnalysisError, IndexError, ValueError) as error:
             messagebox.showerror("多点参考选择无效", str(error))
@@ -3025,7 +3063,8 @@ class AtomMarkerApp:
         a_len = np.linalg.norm(a_vec)
         b_len = np.linalg.norm(b_vec)
         try:
-            validate_reference_lattice(a_vec, b_vec)
+            validate_reference_lattice(a_vec, b_vec,
+                                       max_condition=self.lattice_max_condition)
         except AnalysisError as error:
             messagebox.showerror("参考矢量无效", str(error))
             self.ref_select_indices = []
@@ -4073,8 +4112,21 @@ class AtomMarkerApp:
         # Never reuse a previous analysis result if this run fails validation.
         self._clear_analysis_results()
 
+        # 阈值先校验：NaN/inf 会让"condition > max_condition"恒为 False 而静默
+        # 绕过全部病态基矢检查；0/负值会把一切合法基矢判为病态。两者都必须在
+        # 任何计算（含参考区精化）之前给出清晰错误。
         try:
-            validate_reference_lattice(a_vec, b_vec)
+            lattice_max_condition = validate_max_condition(
+                self.lattice_max_condition, label="lattice_max_condition")
+        except AnalysisError as error:
+            messagebox.showerror("阈值无效", f"晶格条件数阈值无效：\n{error}")
+            self.status.config(text="错误: 晶格条件数阈值无效")
+            return
+        self.lattice_max_condition = lattice_max_condition
+
+        try:
+            validate_reference_lattice(a_vec, b_vec,
+                                       max_condition=lattice_max_condition)
         except (np.linalg.LinAlgError, AnalysisError) as error:
             messagebox.showerror("错误", f"参考晶格无效：\n{error}")
             self.status.config(text="错误: 参考晶格无效")
@@ -4090,7 +4142,8 @@ class AtomMarkerApp:
         r_origin, r_a, r_b = origin, a_vec, b_vec
         if region_mask is not None:
             r_origin, r_a, r_b, refine_applied, n_ref_used = refine_lattice_basis_in_region(
-                pts, origin, a_vec, b_vec, region_mask)
+                pts, origin, a_vec, b_vec, region_mask,
+                max_condition=lattice_max_condition)
             if refine_applied:
                 da_pct = np.linalg.norm(r_a - a_vec) / max(np.linalg.norm(a_vec), 1e-12) * 100
                 db_pct = np.linalg.norm(r_b - b_vec) / max(np.linalg.norm(b_vec), 1e-12) * 100
@@ -4102,7 +4155,8 @@ class AtomMarkerApp:
             return
         # ---- 全局一对一晶格分配: 每个用户确认点都保留并参与位移分析 ----
         try:
-            assignment = assign_unique_lattice_indices(pts, r_origin, r_a, r_b)
+            assignment = assign_unique_lattice_indices(
+                pts, r_origin, r_a, r_b, max_condition=lattice_max_condition)
         except (AnalysisError, ValueError) as error:
             messagebox.showerror("晶格索引分配失败", str(error))
             self.status.config(text=f"错误: 晶格索引分配失败 ({error})")
@@ -4165,6 +4219,9 @@ class AtomMarkerApp:
             von_mises_coeff=float(self.von_mises_coeff),
             analysis_method=str(self.analysis_method),
             image_shape=(int(self.image.shape[0]), int(self.image.shape[1])),
+            # 与参考晶格校验、索引分配共用同一阈值快照：worker 里不得再读实例
+            # 状态，也不得回落到隐藏默认 30，否则用户放宽的阈值会被静默挡下。
+            lattice_max_condition=float(lattice_max_condition),
         )
 
         def _run():
@@ -4179,7 +4236,8 @@ class AtomMarkerApp:
                              displacements, r_origin, r_a, r_b, n_pts,
                              refine_applied, da_pct, db_pct, n_ref_used, n_bad,
                              n_conflicts, n_reassigned, von_mises_coeff,
-                             analysis_method, image_shape):
+                             analysis_method, image_shape,
+                             lattice_max_condition=None):
         """Heavy, Tk-free half of ``run_ppa_analysis``.
 
         只读传入参数, 不读写可变实例状态; 全部结果放入 queue payload, 由
@@ -4212,11 +4270,17 @@ class AtomMarkerApp:
             return
         try:
             if analysis_method == "peak_pairs":
+                local_kwargs = {"equivalent_coefficient": von_mises_coeff}
+                if lattice_max_condition is not None:
+                    # 与 validate_reference_lattice 共用同一阈值：此前局部 PPA
+                    # 硬编码 30，用户按 LATTICE_CONDITION_GUIDANCE 放宽参考晶格
+                    # 阈值后，局部路径仍按 30 拒绝且无提示。
+                    local_kwargs["max_condition"] = lattice_max_condition
                 result = compute_local_peak_pair_strain(
                     lattice_indices,
                     matched_ideal * np.array([1.0, -1.0]),
                     pts * np.array([1.0, -1.0]),
-                    equivalent_coefficient=von_mises_coeff)
+                    **local_kwargs)
                 strain_fields = _strain_fields_from_result(result, "sites", matched_ideal)
                 invalid_mask = ~np.asarray(result.quality_mask, dtype=bool)
                 invalid_sites = pts[invalid_mask] if np.any(invalid_mask) else None
@@ -5255,7 +5319,10 @@ class AtomMarkerApp:
         self.reference_metadata = None
         if reference:
             try:
-                validate_reference_lattice(reference['a_vec'], reference['b_vec'])
+                # 项目里的参考晶格也必须按当前阈值校验，否则加载时会被隐藏默认
+                # 30 拒绝（用户放宽后保存的项目无法恢复）。
+                validate_reference_lattice(reference['a_vec'], reference['b_vec'],
+                                           max_condition=self.lattice_max_condition)
                 self.reference_vecs = (np.asarray(reference['a_vec'], dtype=float), np.asarray(reference['b_vec'], dtype=float))
                 self.ref_origin = np.asarray(reference['origin'], dtype=float)
                 estimation = reference.get('estimation')

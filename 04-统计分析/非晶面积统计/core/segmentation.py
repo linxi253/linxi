@@ -77,37 +77,69 @@ class SegmentationParams:
             self.foreground = FOREGROUND_BRIGHT
 
 
+# uint8 上限，以及映射后必须保有的最小值。
+# 固定阈值分割用 `gray > threshold`（默认 128）判定前景，因此数据集量程
+# 映射到 uint8 后必须 **> 阈值**，否则整幅图被判为背景：面积 0、非晶 100%，
+# 且无任何告警（回归 2026-10-03 R2）。
+_UINT8_MAX = 255
+_MIN_MAPPED_MAX = 129  # 严格大于默认阈值 128
+
+
 def resolve_uint16_shift(img_max: float) -> int:
     """按数据实际量程选择 uint16 → uint8 的右移位数。
 
-    12-bit 相机（满量程 0-4095）用固定 /256 会被压到 0-15，导致固定阈值
-    与 Otsu 全部失效。按量程分档右移 0/4/6/8 位，每档把该量程顶端映射到
-    ~255，固定阈值始终有可用动态范围。位深判定应以"数据集"为单位
-    （同一批数据共用一个 shift），而不是逐图判定——逐图判定会让同一堆栈中
-    明暗不同的切片使用不同映射，破坏跨切片可比性（回归 2026-09-06 P1；
-    2026-09-28 补 14-bit 档：0-16383 数据曾被 >>8 压到 0-63，阈值 128
-    静默全灭）。
+    背景
+    ----
+    12-bit 相机（满量程 0-4095）用固定 /256 会被压到 0-15，使固定阈值与 Otsu
+    全部失效。故按量程选择右移位数，把量程顶端映射到 ~255。位深判定以
+    "数据集"为单位（同一批数据共用一个 shift），而非逐图判定——逐图判定会让
+    同一堆栈中明暗不同的切片使用不同映射，破坏跨切片可比性
+    （回归 2026-09-06 P1）。
 
-    分档保持粗粒度（而非按 max 逐位计算）：同为 12-bit 相机的明暗两次
-    采集仍落在同一档，跨数据集的固定阈值语义尽量稳定。
+    不变量（回归 2026-10-03 R2）
+    --------------------------
+    此前的分档只保证"档位**顶端**映射到 ~255"，档位**下沿**的数据集会被压到
+    阈值以下：13-bit 全段（4096-8191 >> 6 → 最大 127）、12-bit 的 256-2063、
+    16-bit 的 16384-33023 都让固定阈值 128 静默产出**全空掩膜**。逐档打补丁
+    （12→13→14）没有按根因收口，同一缺陷会反复出现。
+
+    现在取**满足不变量前提下最大的**位移（即最大程度压缩动态范围）：扫描
+    s = 8..1，返回第一个使 ``img_max >> s >= 129`` 的 s；若都不满足则返回 0。
+    对任意 ``img_max > 255`` 都有::
+
+        129 <= min(img_max >> shift, 255) <= 255
+
+    上界由 :func:`uint16_to_uint8` 的 clip 收口 —— 若改用
+    ``astype(np.uint8)``，256 会回绕成 0（亮像素变黑）。
+
+    注意映射在档位边界处**不单调**（如 257 → 255、258 → 129），这是纯移位
+    压缩的固有性质：两者都高于阈值、都能分出前景。位深判定以数据集为单位
+    （一个数据集只有一个 shift），同一数据集内映射仍然单调，故不影响
+    同一数据集内结果的可比性。**不同数据集之间**的 shift 可能不同，因此
+    固定阈值 128 对应的**原始强度**在不同数据集上并不相同——见 README 的
+    科学说明。
 
     Args:
         img_max: 该数据集（目录/堆栈）中观测到的最大灰度值
 
     Returns:
-        右移位数（0 / 4 / 6 / 8）
+        右移位数（0-8 的整数）
     """
-    if img_max <= 255:
+    value = int(max(0.0, float(img_max)))
+    if value <= _UINT8_MAX:
         return 0
-    if img_max <= 4095:
-        return 4
-    if img_max <= 16383:
-        return 6
-    return 8
+    for shift in range(8, 0, -1):
+        if (value >> shift) >= _MIN_MAPPED_MAX:
+            return shift
+    # 8 位压缩仍无法达到 129（值域 (255, 258) 的窄区间）：不压缩，交给 clip
+    return 0
 
 
 def uint16_to_uint8(image: np.ndarray, shift: Optional[int] = None) -> np.ndarray:
     """uint16 → uint8 按给定移位缩放，而非固定 /256。
+
+    移位后必须 **clip 到 255** 再转 uint8：``astype(np.uint8)`` 是回绕语义，
+    值 256 会变成 0（亮像素变黑），256-511 全部错位（回归 2026-10-03 R2）。
 
     Args:
         image: uint16 灰度图
@@ -120,8 +152,9 @@ def uint16_to_uint8(image: np.ndarray, shift: Optional[int] = None) -> np.ndarra
     if shift is None:
         shift = resolve_uint16_shift(float(np.max(image)))
     if shift == 0:
-        return image.astype(np.uint8)
-    return np.right_shift(image, shift).astype(np.uint8)
+        return np.minimum(image, _UINT8_MAX).astype(np.uint8)
+    scaled = np.right_shift(image, shift)
+    return np.minimum(scaled, _UINT8_MAX).astype(np.uint8)
 
 
 def has_non_finite(image: np.ndarray) -> bool:
@@ -193,8 +226,14 @@ def segment_threshold(gray: np.ndarray, params: SegmentationParams) -> np.ndarra
     """
     固定阈值分割
 
-    原理：像素值 >= threshold 的区域判定为晶体区域。
-    适用于衬度均匀、晶体与非晶区域灰度差异明显的图像。
+    原理：像素值 **严格大于** threshold 的区域判定为晶体区域
+    （OpenCV ``THRESH_BINARY`` 语义：`gray > threshold`；恰好等于阈值的
+    像素属于背景）。适用于衬度均匀、晶体与非晶区域灰度差异明显的图像。
+
+    注意 threshold 作用在**映射后的 8 位灰度**上，而映射位移按数据集量程
+    自动选择（见 :func:`resolve_uint16_shift`）。因此同一个 threshold 数值
+    在不同数据集上对应的原始强度可能不同；跨数据集比较前请确认量程档位
+    一致，或显式指定 shift。
 
     Args:
         gray: 8位灰度图

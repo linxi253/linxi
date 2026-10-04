@@ -33,7 +33,7 @@ import numpy as np
 
 from ._fft import fast_grid_size, fft2, ifft2, get_threads, set_threads
 from .detectors import RingDetector, make_detectors
-from .multislice import _build_slice_transmissions_shape, _fresnel_propagator
+from .multislice import _fresnel_propagator, build_slice_transmissions
 from .phonons import FrozenPhonons, PhononConfig
 from .probe import StemOptics, frequency_grid, probe_ft
 from .structure import Structure
@@ -356,7 +356,7 @@ def _worker_transmissions(config_index: int):
     structure = payload["structure"]
     if payload["phonons"] is not None:
         structure = payload["phonons"][config_index]
-    trans, sampling, extent = _build_slice_transmissions_shape(
+    trans, sampling, extent = build_slice_transmissions(
         structure,
         payload["optics"],
         sampling=payload["sampling"],
@@ -713,7 +713,7 @@ def stem_scan(
         prop = _fresnel_propagator(optics.wavelength, dz, nx_g, ny_g, sx, sy)
         for c in range(n_configs):
             sub = crystal if phonon_iter is None else phonon_iter[c]
-            trans, _s, _e = _build_slice_transmissions_shape(
+            trans, _s, _e = build_slice_transmissions(
                 sub, optics, sampling=sampling, gpts=(ny_g, nx_g),
                 slice_thickness=slice_thickness, padding=0.0, table=table,
             )

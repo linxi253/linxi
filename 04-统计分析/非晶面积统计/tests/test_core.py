@@ -299,20 +299,74 @@ class TestUint16DatasetShift:
         assert uint16_to_uint8(dark, shift)[0, 0] == uint16_to_uint8(bright, shift)[0, 1]
 
     def test_auto_shift_backward_compatible(self):
-        # 不传 shift 时保持旧的"按单图 max 自动"行为
+        # 不传 shift 时按单图 max 自动选择（R2 起：满足"顶端 > 阈值"的最大位移）
         arr = np.array([[3000]], dtype=np.uint16)
+        assert resolve_uint16_shift(3000) == 4
         assert uint16_to_uint8(arr)[0, 0] == 3000 >> 4
 
-    def test_resolve_shift_tiers(self):
-        assert resolve_uint16_shift(255) == 0
-        assert resolve_uint16_shift(256) == 4
-        assert resolve_uint16_shift(4095) == 4
-        # 2026-09-28：补 14-bit 档——0-16383 数据此前被 >>8 压到 0-63，
-        # 固定阈值 128 静默全灭
-        assert resolve_uint16_shift(4096) == 6
-        assert resolve_uint16_shift(16383) == 6
-        assert resolve_uint16_shift(16384) == 8
-        assert resolve_uint16_shift(65535) == 8
+    def test_resolve_shift_invariant_reaches_threshold(self):
+        """回归 2026-10-03 R2：shift 必须让量程顶端映射到固定阈值之上。
+
+        此前本用例断言的是**分档表**（256→4、4096→6、16384→8）。那张表在档位
+        **下沿**是错的：256>>4=16、4096>>6=64、16384>>8=64、33023>>8=128，全部
+        ≤ 默认阈值 128，于是固定阈值分割静默产出全空掩膜（面积 0、非晶 100%）。
+        断言分档数字等于把缺陷固化下来，因此改为断言**不变量本身**：
+        对任意量程，映射后的最大值必须严格大于阈值。
+        """
+        for peak in (255, 256, 257, 258, 1024, 4095, 4096, 8191, 16383, 16384,
+                     33023, 65535):
+            shift = resolve_uint16_shift(peak)
+            assert 0 <= shift <= 8, peak
+            mapped = min(peak >> shift, 255)
+            if peak <= 255:
+                assert shift == 0, peak
+                continue
+            assert mapped > 128, (
+                f"量程 {peak} 经 shift={shift} 映射到 {mapped}，"
+                "不超过默认阈值 128：固定阈值会静默全灭"
+            )
+
+    def test_every_uint16_range_is_reachable(self):
+        """穷举 256..65535：不存在被压到阈值以下的量程（R2 全量反例）。"""
+        unreachable = []
+        for peak in range(256, 65536):
+            shift = resolve_uint16_shift(peak)
+            if min(peak >> shift, 255) <= 128:
+                unreachable.append((peak, shift))
+        assert unreachable == [], f"仍有 {len(unreachable)} 个量程不可达，例如 {unreachable[:5]}"
+
+    def test_shift_never_wraps_bright_to_black(self):
+        """共享 shift 时亮像素不得回绕变黑（R2 clip 反例）。
+
+        ``astype(np.uint8)`` 是回绕语义：shift=0 时 256 会变成 0。修复前
+        ``[0, 256, 511, 65535]`` 映射为 ``[0, 0, 255, 255]``，亮像素变黑。
+        """
+        raw = np.array([0, 256, 511, 65535], dtype=np.uint16)
+        mapped = uint16_to_uint8(raw, 0)
+        assert mapped.tolist() == [0, 255, 255, 255]
+
+    def test_mapping_is_monotonic_within_one_shift(self):
+        """同一 shift 下映射必须单调不减，否则同一数据集内比较失真。"""
+        raw = np.arange(0, 65536, dtype=np.uint16)
+        for shift in (0, 1, 4, 6, 8):
+            mapped = uint16_to_uint8(raw, shift).astype(np.int32)
+            assert np.all(np.diff(mapped) >= 0), f"shift={shift} 映射非单调"
+
+    def test_shared_shift_keeps_frames_comparable(self):
+        """同一数据集共用一个 shift：相同灰度必须映射到同一值（R2 跨帧一致性）。"""
+        shift = resolve_uint16_shift(65535)
+        dark = np.array([[3000]], dtype=np.uint16)
+        bright = np.array([[60000, 3000]], dtype=np.uint16)
+        assert uint16_to_uint8(dark, shift)[0, 0] == uint16_to_uint8(bright, shift)[0, 1]
+
+    def test_bright_and_dark_polarity_both_usable(self):
+        """亮/暗两种前景极性在同一映射下都必须能分出前景（R2 极性）。"""
+        raw = np.array([[0, 65535], [0, 65535]], dtype=np.uint16)
+        gray = uint16_to_uint8(raw, resolve_uint16_shift(65535))
+        bright = segment_threshold(gray, SegmentationParams(foreground='bright'))
+        dark = segment_threshold(gray, SegmentationParams(foreground='dark'))
+        assert int(bright.sum()) > 0
+        assert int(dark.sum()) > 0
 
     def test_14bit_data_survives_threshold_128(self):
         # 14-bit 量程顶端映射到 ~255，固定阈值 128 不再全灭
@@ -320,8 +374,15 @@ class TestUint16DatasetShift:
         mapped = uint16_to_uint8(arr, resolve_uint16_shift(16000))
         assert int(mapped.max()) >= 250
         params = SegmentationParams(method='threshold', threshold=128)
-        mask, _, _ = segment_image(arr.reshape(1, 4), params, uint16_shift=6)
+        mask, _, _ = segment_image(arr.reshape(1, 4), params,
+                                   uint16_shift=resolve_uint16_shift(16000))
         assert int(mask.sum()) > 0
+
+    def test_threshold_is_strictly_greater(self):
+        """固定阈值判据是 `gray > threshold`（不是 >=），文档口径必须一致。"""
+        gray = np.array([[128, 129]], dtype=np.uint8)
+        mask = segment_threshold(gray, SegmentationParams(threshold=128))
+        assert mask.tolist() == [[False, True]]
 
 
 class TestRegionRecords:

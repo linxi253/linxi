@@ -312,8 +312,8 @@ ssb_result = ssb_reconstruct(
 |------|------|
 | **问题描述** | 原始提取使用 `>u2` (big-endian uint16)，字节序确属错误；当时把 dtype 修为 `<i2` (little-endian int16)，但那是按错码表（ncempy 的 tag 编码类型表 `_EncodedTypeDTypes`）得出的结论——Au 的 dataType=2 按图像 dataType 表（`core/dm4_io.py` 的 `DM4_DTYPES`）应为 `<f4` (little-endian float32) |
 | **发现方法** | `check_raw_data.py` 对比不同数据类型解释的结果 |
-| **影响** | 数据完全错误，无法进行任何分析；按 int16 解码 float32 字节数相同、能通过文件大小自检，错值静默进入后续定量分析 |
-| **解决方案** | 使用 ncempy 正确读取 DM4 元数据确定 dataType 码，并按图像 dataType 表映射 dtype；`core/dm4_io.py` 现在还会在解码前校验「码→itemsize→与 tag 声明字节数一致」 |
+| **影响** | 错误 dtype 会产生错误数值，旧文件大小自检不足以证明解码正确；相关产物不可直接用于定量分析 |
+| **解决方案** | 从 DM4 头部读取图像 dataType 并映射 dtype，同时核对该 dtype 计算的字节数与 tag 声明字节数及文件边界；`core/dm4_io.py` 会在解码前校验「码→itemsize→与 tag 声明字节数一致」 |
 | **修复状态** | ✅ 已修复 |
 
 ### 问题 2: 约 50% 负值像素（数据质量问题）

@@ -846,7 +846,21 @@ class TiffStackViewer:
         # 退出路径：显式释放内存映射的文件句柄，解除对源文件的锁定
         close_tiff_stack(self.tiff_stack)
         self.tiff_stack = None
-        plt.close('all')
+        # 只关闭本工具持有的 figure：plt.close('all') 会清掉同进程内其他
+        # 工具（如 4D-STEM、GPA，以及在 Suite 里同时打开的其他标签页）
+        # 通过 pyplot 创建的图窗（回归 2026-09-29 P0）。
+        # 必须判空：plt.close(None) 等价于关闭**当前** figure，会把旁边的
+        # 图窗误关（尚未建图的实例或建图失败的路径都会走到这里）。
+        # 只关闭本工具持有的 figure：plt.close('all') 会清掉同进程内其他
+        # 工具（如 4D-STEM、GPA，以及在 Suite 里同时打开的其他标签页）
+        # 通过 pyplot 创建的图窗（回归 2026-09-29 P0）。
+        # 必须判空：plt.close(None) 等价于关闭**当前** figure，会把旁边的
+        # 图窗误关（尚未建图的实例或建图失败的路径都会走到这里）。
+        if self.fig is not None:
+            try:
+                plt.close(self.fig)
+            except Exception:
+                pass
         self.root.destroy()
 
     # ==================== 信息显示 ====================
@@ -2114,6 +2128,21 @@ class TiffStackViewer:
         except Exception as e:
             logger.exception("加载项目失败")
             messagebox.showerror("错误", f"加载项目失败: {str(e)}")
+            return
+
+        # 顶层必须是 dict：json.load 对 "[]"/"123"/"\"x\"" 都能成功解析，
+        # 随后的 .get 会抛未捕获的 AttributeError（打包版无控制台时用户
+        # 只见无响应）。校验失败时不清空当前项目，也不设置 _pending_project。
+        if not isinstance(project_data, dict):
+            messagebox.showerror(
+                "错误",
+                f"项目文件格式不正确：顶层应为 JSON 对象，实际为 "
+                f"{type(project_data).__name__}。")
+            # status_var 在完整实例上一定存在；用 getattr 兜底，使只构造了部分
+            # 字段的调用方也不会因提示本身再抛 AttributeError。
+            status_var = getattr(self, "status_var", None)
+            if status_var is not None:
+                status_var.set("加载项目失败：文件格式不正确")
             return
 
         tiff_path = project_data.get('file_path', '')

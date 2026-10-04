@@ -1,0 +1,984 @@
+{
+  "schema": 2,
+  "purpose": "环境与测试契约的单一事实来源：探针、验证、CI 执行行都从这里派生。本文件不记录任何机器专属路径。",
+  "rules": {
+    "install": "只能安装项目自己的冻结锁（install.chain[0]）；安装过程绝不写锁。",
+    "lock_update": "本工具集不实现自动更新锁。锁的更新必须在独立的干净解析环境里完成，再单独审查差异并提交。",
+    "tests": "测试用项目自己的解释器与 test.venv；测试依赖走 test_overlay，不升级运行锁中已固定的包。",
+    "base": "母本只用于 python -m venv。不向母本装包，也不用母本运行业务代码或测试。",
+    "explicit_wins": "显式给出的解释器（环境变量/参数）不合格时立即失败，绝不回退到自动探测结果。"
+  },
+  "base_interpreters": [
+    {
+      "id": "py310",
+      "version": "3.10"
+    },
+    {
+      "id": "py312",
+      "version": "3.12"
+    }
+  ],
+  "interpreter_discovery": {
+    "env_var_single": "AIFORTEM_BASE_PY",
+    "env_var_map": "AIFORTEM_PYTHONS",
+    "env_var_map_format": "3.10=C:\\path\\python.exe;3.12=C:\\other\\python.exe",
+    "order": [
+      "AIFORTEM_PYTHONS[<version>] / AIFORTEM_PYTHONS[default] / AIFORTEM_BASE_PY（显式，失败即终止）",
+      "Windows py launcher: py -<version>",
+      "~/miniconda3、~/anaconda3、~/.conda/envs/py<tag>、%LOCALAPPDATA%\\Programs\\Python\\Python<version>",
+      "C:\\Python<tag>、C:\\ProgramData\\Miniconda3（含 envs\\py<tag>）",
+      "已存在的 conda envs 目录中版本匹配的解释器"
+    ]
+  },
+  "test_overlay": {
+    "pytest": "pytest==8.4.2",
+    "policy": "已按运行锁安装；overlay 只在 pytest 缺失、或项目 requirements.txt 声明的 pytest 约束与已装版本冲突时安装，且受运行锁约束（不升级锁内包）。锁与 requirements 的 pytest 声明冲突时报告冲突，不静默覆盖。"
+  },
+  "projects": [
+    {
+      "name": "视频切片工具",
+      "dir": "01-视频与数据提取/视频切片工具",
+      "base": "3.12",
+      "python": {
+        "min": "3.11",
+        "max": "3.14"
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.resolved-win-py312.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "tifffile",
+        "imageio_ffmpeg"
+      ],
+      "note": "requires-python >=3.11,<3.14，必须 3.12 母本；CI 另需 FFmpeg 8.x（由 CI 步骤提供）。",
+      "ci": {
+        "name": "01 视频切片工具",
+        "ffmpeg": true
+      }
+    },
+    {
+      "name": "hrtem-HRTEM滤波工具",
+      "dir": "02-图像处理/hrtem-HRTEM滤波工具",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": "3.15"
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "tifffile",
+        "imagecodecs",
+        "matplotlib"
+      ],
+      "ci": {
+        "name": "02 HRTEM/STEM 滤波"
+      }
+    },
+    {
+      "name": "drift-correction-v7",
+      "dir": "02-图像处理/drift-correction-v7",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": "3.13"
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.resolved-win-py310.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "cv2",
+        "matplotlib",
+        "tifffile",
+        "tkinterdnd2"
+      ],
+      "note": "requirements.lock 头部标注按 Windows x64 / Python 3.10.9 验证。",
+      "ci": {
+        "name": "02 TIFF 漂移矫正 v7"
+      }
+    },
+    {
+      "name": "stem-optimize-STEM图像优化",
+      "dir": "02-图像处理/stem-optimize-STEM图像优化",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements-win-py310.lock"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "cv2",
+        "tifffile",
+        "defusedxml",
+        "imagecodecs"
+      ],
+      "note": "锁名与头部均为 Windows x64 / CPython 3.10 且带 --require-hashes，因此母本固定 3.10，不允许 3.12 回退。",
+      "ci": {
+        "name": "02 STEM 图像优化"
+      }
+    },
+    {
+      "name": "图像加滤镜工具",
+      "dir": "02-图像处理/图像加滤镜工具",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "PIL",
+        "tifffile",
+        "imagecodecs"
+      ],
+      "note": "测试文件在项目根（test_*.py），不在 tests/。另有 requirements-dev.lock.txt 属构建环境，不在运行契约内。",
+      "ci": {
+        "name": "02 图像加滤镜工具"
+      }
+    },
+    {
+      "name": "离域效应去除工具",
+      "dir": "02-图像处理/离域效应去除工具",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "tifffile",
+        "PIL",
+        "imagecodecs"
+      ],
+      "ci": {
+        "name": "02 离域效应去除"
+      }
+    },
+    {
+      "name": "strainpp-GPA应变分析",
+      "dir": "03-应变分析/strainpp-GPA应变分析",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements-lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "tifffile",
+        "ttkbootstrap",
+        "ncempy"
+      ],
+      "ci": {
+        "name": "03 Strain++ GPA"
+      }
+    },
+    {
+      "name": "原子级应力分析-PPA",
+      "dir": "03-应变分析/原子级应力分析-PPA",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "unittest",
+          "argv": [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-v"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "tifffile",
+        "PIL"
+      ],
+      "ci": {
+        "name": "03 PPA 原子级应力"
+      },
+      "note": "tests/ 用标准库 unittest（原独立 92 项证据即 -m unittest discover -s tests -v），这是唯一登记入口：同一批测试不再按 pytest 重复跑一遍，也不要为它安装 pytest。"
+    },
+    {
+      "name": "原子识别纯算法",
+      "dir": "03-应变分析/原子识别纯算法",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "tifffile",
+        "PIL"
+      ],
+      "ci": {
+        "name": "03 原子识别纯算法"
+      }
+    },
+    {
+      "name": "原子中心识别模型开发",
+      "dir": "03-应变分析/原子中心识别模型开发",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": "3.11"
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements/inference-win-py310.lock"
+        ],
+        "reproducible": true
+      },
+      "editable": {
+        "args": [
+          "-e",
+          ".",
+          "--no-deps"
+        ],
+        "package": "atom_center",
+        "src": "src"
+      },
+      "test_deps": [
+        "opencv-python==4.11.0.86"
+      ],
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "verify_imports": [
+        "numpy",
+        "yaml",
+        "PIL",
+        "scipy",
+        "tifffile"
+      ],
+      "note": "requires-python >=3.10,<3.11，母本固定 3.10。用 inference-win-py310.lock（推理依赖，不含 torch 训练栈）+ editable --no-deps；训练锁 training-win-py310.lock / lock-win-cu128.txt 本轮不安装。packaged_smoke 依赖未收录的字体资产，按存在性跳过。",
+      "ci": {
+        "name": "03 原子中心识别模型开发",
+        "deps": "opencv-python==4.11.0.86"
+      }
+    },
+    {
+      "name": "原子衬度统计",
+      "dir": "04-统计分析/原子衬度统计",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "matplotlib",
+        "tifffile",
+        "ttkbootstrap",
+        "PIL"
+      ],
+      "ci": {
+        "name": "04 原子衬度统计"
+      }
+    },
+    {
+      "name": "特征区域演化分析",
+      "dir": "04-统计分析/特征区域演化分析",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "tifffile",
+        "seaborn",
+        "skimage"
+      ],
+      "ci": {
+        "name": "04 特征区域演化分析"
+      }
+    },
+    {
+      "name": "统计面积",
+      "dir": "04-统计分析/统计面积",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "tifffile",
+        "numpy",
+        "pandas",
+        "matplotlib",
+        "PIL",
+        "openpyxl"
+      ],
+      "ci": {
+        "name": "04 统计面积"
+      }
+    },
+    {
+      "name": "非晶面积统计",
+      "dir": "04-统计分析/非晶面积统计",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "cv2",
+        "numpy",
+        "scipy",
+        "tifffile",
+        "PIL",
+        "pandas",
+        "openpyxl",
+        "ttkbootstrap"
+      ],
+      "note": "公开版去掉主源码的 pythonProject 层。",
+      "ci": {
+        "name": "04 晶体/非晶区域统计"
+      }
+    },
+    {
+      "name": "4D-STEM-Processor",
+      "dir": "05-4D-STEM分析/4D-STEM-Processor",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.resolved-win-py310.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "ncempy"
+      ],
+      "ci": {
+        "name": "05 4D-STEM Processor"
+      }
+    },
+    {
+      "name": "EELS边缘价态分析工具",
+      "dir": "05-EELS分析/EELS边缘价态分析工具",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "ncempy"
+      ],
+      "ci": {
+        "name": "05 EELS 边缘价态分析"
+      }
+    },
+    {
+      "name": "09-HRTEM模拟",
+      "dir": "09-HRTEM模拟",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "-q",
+            "-rs"
+          ]
+        },
+        {
+          "label": "verify_physics",
+          "argv": [
+            "tests/verify_physics.py"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "PIL",
+        "tifffile",
+        "ase",
+        "ttkbootstrap"
+      ],
+      "ci": {
+        "name": "09 HRTEM 模拟"
+      }
+    },
+    {
+      "name": "010-STEM模拟",
+      "dir": "010-STEM模拟",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.resolved-win-py310.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "tests",
+            "-q",
+            "-rs"
+          ]
+        },
+        {
+          "label": "verify_physics",
+          "argv": [
+            "tests/verify_physics.py"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "PIL",
+        "tifffile",
+        "ase",
+        "ttkbootstrap",
+        "pyfftw"
+      ],
+      "note": "tests/ 同时有 pytest 套件（含真实 Au 端到端）与 verify_physics.py 物理自检；test_e2e_au.py 已改为真 fixture（原 fixture 'pl' not found 已修），两个入口都要跑。",
+      "ci": {
+        "name": "010 STEM 模拟"
+      }
+    },
+    {
+      "name": "全整合(TEM Suite)",
+      "dir": "全整合",
+      "base": "3.10",
+      "python": {
+        "min": "3.10",
+        "max": null
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "tests/test_integration_review.py",
+            "-q",
+            "-rs"
+          ]
+        },
+        {
+          "label": "smoke_test",
+          "argv": [
+            "tests/smoke_test.py"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "pandas",
+        "tifffile",
+        "PIL",
+        "skimage",
+        "seaborn",
+        "openpyxl",
+        "imagecodecs",
+        "defusedxml",
+        "ttkbootstrap",
+        "ncempy",
+        "tkinterdnd2",
+        "cv2"
+      ],
+      "note": "tests/test_integration_review.py 是集成回归 pytest 套件；tests/smoke_test.py 是 14 工具构造冒烟脚本（直接改 stdout，不能与 pytest 同进程收集，故分开声明）。",
+      "ci": {
+        "name": "全整合 TEM Suite"
+      }
+    },
+    {
+      "name": "10-DSH集成(TEM视频流水线)",
+      "dir": "10-DSH集成",
+      "base": "3.12",
+      "python": {
+        "min": "3.11",
+        "max": "3.13"
+      },
+      "venv": ".venv",
+      "venvs_to_create": [
+        ".venv"
+      ],
+      "install": {
+        "chain": [
+          "requirements.lock.txt"
+        ],
+        "reproducible": true
+      },
+      "tests": [
+        {
+          "label": "pytest",
+          "argv": [
+            "-m",
+            "pytest",
+            "tests",
+            "-q",
+            "-rs"
+          ]
+        }
+      ],
+      "test": {
+        "venv": ".venv"
+      },
+      "editable": false,
+      "verify_imports": [
+        "numpy",
+        "cv2",
+        "tifffile",
+        "matplotlib"
+      ],
+      "note": "跨项目适配脚本。tests/ 含单元层与真实全链层（test_pipeline_end_to_end.py，合成 FFV1 视频经真实 CLI 跑通），入口 -m pytest tests -q；CI 第 20 项提供 FFmpeg。运行锁按两份上游锁定精确 pin，不含 pytest。",
+      "ci": {
+        "name": "10 TEM 视频流水线",
+        "ffmpeg": true
+      }
+    }
+  ]
+}

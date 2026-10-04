@@ -1,122 +1,119 @@
 # -*- coding: utf-8 -*-
-"""Audit the AIforTEM workspace for environment-isolation violations.
+"""Audit the workspace for environment-isolation violations (manifest-driven).
+
+Scope
+-----
+This tool does **not** walk the workspace. It inspects:
+
+* every project declared in ``.tools/projects.json`` -- including ones whose
+  directory is absent, which are reported explicitly rather than skipped, and
+* launcher scripts (``*.bat`` / ``*.cmd`` / ``*.ps1``) inside those project
+  directories, pruning excluded subtrees **before** descending into them.
+
+Excluded by directory pruning (never entered, never read): ``.venv`` and every
+``.venv.*`` backup, history trees, data/experiment trees, build/dist/cache
+outputs, ``site-packages`` and ``.review-tmp`` task artefacts. The project's own
+source directories are always scanned, so a real bare-``python`` launcher in the
+source is still reported.
 
 Checks
 ------
-1. The Miniconda base interpreter is clean (``pip check`` passes, no ``~*``
-   leftover distribution directories in site-packages).
-2. Every active project that declares dependencies also has a project-local
-   venv and a lock file.
-3. Every project venv is genuinely isolated
-   (``include-system-site-packages = false``) and its interpreter runs.
-4. No launcher/build script falls back to a bare ``python`` from PATH.
-5. Every auto-generated lock (carrying the 「自动生成」 header) still matches
-   at least one project venv's exact ``pip freeze``.
-6. The user-level ``pip.ini`` is ASCII-only and still parses under pip.
+1. Declared projects: directory present, lock present, venv present, venv
+   isolated and runnable, Python inside the declared range.
+2. Declared pins vs installed versions (never an equality test against the full
+   ``pip freeze``: a test overlay legitimately adds packages).
+3. Dependency-closure coverage, measured by a single metadata probe
+   (``_closure_probe.py``, shared through ``_envcommon``). Only a fully
+   successful probe that finds every active transitive requirement declared,
+   installed and satisfied yields ``closure-complete``.
+4. Launcher scripts must not fall back to a bare ``python`` from PATH.
 
-审计 123：默认模式下，「锁文件在场但 venv 尚未建立」（no venv）只降级为
-info——新克隆/未建环境的工作区上这是预期初始状态，不是隔离约定被破坏；
-传 ``--strict`` 恢复严格行为（no venv 也计为违规）。缺 lock file、
-venv 泄漏系统 site-packages、解释器损坏等仍一律 FAIL。
+Exit code 0 = clean, 1 = violations. ``--strict`` additionally fails when a
+declared project has no venv (a fresh checkout); default mode reports that as
+``info`` because "not provisioned here" is not a broken convention.
 
-Usage::
-
-    python <仓库根>\\.tools\\check-env-isolation.py [--strict]
-
-Exit code 0 = clean, 1 = violations found.
+Base interpreter: a base explicitly requested on the command line or through
+``AIFORTEM_BASE_PY`` / ``AIFORTEM_PYTHONS`` must exist, run and match the
+declared version; there is no fallback to a discovered interpreter. Auditing
+already-provisioned environments does not require any base to be present, and
+this tool never installs anything.
 """
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-# base（母本）解释器：环境变量 AIFORTEM_BASE_PY 优先，其次探测常见安装位置
-# （与 .tools/provision-envs.py 同一约定）。都不可用时 BASE_PY 为 None，
-# [1]/[6] 两项检查把它作为一条违规报告（不崩溃）。
-BASE_PY_ENV_VAR = "AIFORTEM_BASE_PY"
-_BASE_PY_CANDIDATES = (
-    r"C:\ProgramData\Miniconda3\python.exe",
-    r"C:\ProgramData\Anaconda3\python.exe",
-    "~/miniconda3/python.exe",
-    "~/anaconda3/python.exe",
-    "~/AppData/Local/Programs/Python/Python313/python.exe",
-    "~/AppData/Local/Programs/Python/Python312/python.exe",
-    "~/AppData/Local/Programs/Python/Python311/python.exe",
-    "~/AppData/Local/Programs/Python/Python310/python.exe",
-    r"C:\Python313\python.exe",
-    r"C:\Python312\python.exe",
-    r"C:\Python311\python.exe",
-    r"C:\Python310\python.exe",
-)
+TOOLS = Path(__file__).resolve().parent
 
 
-def _resolve_base_py() -> Path | None:
-    env_value = os.environ.get(BASE_PY_ENV_VAR, "").strip()
-    candidates = [Path(env_value).expanduser()] if env_value else []
-    candidates += [Path(p).expanduser() for p in _BASE_PY_CANDIDATES]
-    for cand in candidates:
-        if cand.is_file():
-            return cand
-    return None
+def _load_envcommon():
+    spec = importlib.util.spec_from_file_location("ec_isolation", TOOLS / "_envcommon.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ec_isolation"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-BASE_PY = _resolve_base_py()
+ec = _load_envcommon()
 
-VENV_NAMES = (".venv", ".venv-build", ".venv-run")
-# 「08-历史版本」是旧文档约定的本机归档目录名；该目录并不存在于本仓库，
-# 列在此处仅为兼容旧检出布局，目录缺席时跳过逻辑本身无害。
-SKIP_DIR_PARTS = {
-    "08-历史版本", "site-packages", "node_modules", "__pycache__", "build",
-    "dist", "runs", "legacy", "release", "_internal", ".runtime", ".tools",
-    ".venv", ".venv-build", ".venv-run", ".review-tmp", "07-文档资料",
-    # 审计 88：零散演示脚本目录——无 requirements*.txt / pyproject.toml，不构成
-    # 受管项目（find_projects 本也不会发现它），依赖由使用者按其 README 自建
-    # venv 安装。在此显式写明跳过理由，而不是让它在 SKIP 集合里沉默。
-    "06-独立脚本",
-}
+ROOT = ec.REPO_ROOT                       # default; overridden by --manifest
+
 SCRIPT_SUFFIXES = (".bat", ".cmd", ".ps1")
 
-# Nested dependency manifests that intentionally have no environment of their
-# own. Keep this list explicit and justified -- never silence a real gap.
-# 本机特有的内部/在研项目路径不写入本公开脚本：需要时把「相对路径 -> 理由」
-# 写入一个本地 JSON 对象文件，并用环境变量 AIFORTEM_DEFERRED_EXTRA 指向它。
-DEFERRED = {
-    r"03-应变分析\原子级应力分析-PPA\atom_detector":
-        "深度学习子项目；PPA 稳定版不加载任何 .pt 模型（见其 README），"
-        "需要时单独建环境",
+# Directory names never descended into. Prefix ``.venv.`` also covers the
+# timestamped backups (e.g. .venv.pre-rebuild-20261003).
+PRUNE_NAMES = {
+    ".venv", ".venv-build", ".venv-run", "venv", "env",
+    "site-packages", "node_modules", "__pycache__",
+    "build", "dist", "release", "_internal", "cache", ".cache",
+    "data", "dataset", "datasets", "runs", "outputs",
+    "08-历史版本", "legacy", ".review-tmp", ".codex_tmp", ".runtime",
+    ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
 }
-DEFERRED_EXTRA_ENV_VAR = "AIFORTEM_DEFERRED_EXTRA"
+PRUNE_PREFIXES = (".venv.", "venv.", "dist.", "build.")
 
-
-def load_deferred_extra() -> dict:
-    path_value = os.environ.get(DEFERRED_EXTRA_ENV_VAR, "").strip()
-    if not path_value:
-        return {}
-    import json
-    raw = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
-    return {str(key): str(reason) for key, reason in raw.items()}
-
-# a bare `python` token: not preceded by a path separator or a $ (PS variable)
 BARE_PYTHON = re.compile(r"(?<![\w\\./\-$])python(?:\.exe)?(?![\w.\-])")
 SAFE_LINE = re.compile(
-    r"^\s*(rem|::|#)"                     # comment (any case)
-    r"|^\s*echo\b"                        # echo text, not a command
-    r"|\$python"                          # PowerShell variable
-    r"|where\s+python"                    # existence probe
-    r"|python\s+-m\s+venv"                # one-time venv bootstrap
-    r"|-m\s+venv"                         # same, other word order
-    r"|BOOTSTRAP\w*"                      # documented bootstrap variable
-    r"|Join-Path.*python"                 # building a path, not invoking
-    r"|-eq\s*['\"]python"                 # string comparison
-    r"|python\s+-c\s+['\"]import sys",    # version probe
+    r"^\s*(rem|::|#)"
+    r"|^\s*echo\b"
+    r"|\$python"
+    r"|where\s+python"
+    r"|python\s+-m\s+venv"
+    r"|-m\s+venv"
+    r"|BOOTSTRAP\w*"
+    r"|Join-Path.*python"
+    r"|-eq\s*['\"]python"
+    r"|python\s+-c\s+['\"]import sys",
     re.IGNORECASE,
 )
 
-problems: list[str] = []
+
+class Findings:
+    """Collects problems (fail) and notes (info) separately."""
+
+    def __init__(self) -> None:
+        self.problems: list[str] = []
+        self.notes: list[str] = []
+
+    def fail(self, message: str) -> None:
+        self.problems.append(message)
+
+    def note(self, message: str) -> None:
+        self.notes.append(message)
+
+
+def run(cmd: list[str], cwd: Path | None = None, timeout: int = 300):
+    try:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, encoding="utf-8", errors="replace",
+                              cwd=str(cwd) if cwd else None, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(cmd, 127, f"[{type(exc).__name__}] {exc}\n", None)
 
 
 def decode(path: Path) -> str:
@@ -129,335 +126,498 @@ def decode(path: Path) -> str:
     return raw.decode("latin-1", "replace")
 
 
-def run(cmd: list[str]) -> subprocess.CompletedProcess:
+def display(path: Path, root: Path) -> str:
+    """Path relative to ``root`` when possible, else absolute (never raises)."""
     try:
-        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, encoding="utf-8", errors="replace")
-    except OSError as exc:
-        # 解释器缺失/无法启动必须转成报告行，而不是让审计脚本本身崩溃
-        return subprocess.CompletedProcess(cmd, 127, f"[OSError] {exc}\n", None)
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
-def skipped(path: Path) -> bool:
-    return any(part in SKIP_DIR_PARTS for part in path.parts)
+# ---------------------------------------------------------------------------
+# manifest-driven scope
+# ---------------------------------------------------------------------------
+def manifest_root(manifest: dict) -> Path:
+    """Root the manifest was loaded from (NOT the tool's own location).
+
+    Falls back to the loader's active root for a synthetic manifest dict that
+    was constructed in-process rather than read from disk.
+    """
+    recorded = manifest.get("_root")
+    if recorded:
+        return Path(recorded)
+    path = manifest.get("_path")
+    if path:
+        return Path(path).resolve().parent.parent
+    return Path(ec.active_root())
 
 
-def check_base() -> None:
-    print("[1] Miniconda base cleanliness")
-    if BASE_PY is None:
-        problems.append("base interpreter not found "
-                        f"（可用 {BASE_PY_ENV_VAR} 指定）")
-        print("    FAIL  base interpreter not found; set AIFORTEM_BASE_PY "
-              "or install Miniconda/Python >= 3.10 in a common location; "
-              "pip check / leftover-dir scan skipped")
-        return
-    sp = BASE_PY.parent / "Lib" / "site-packages"
-    if sp.is_dir():
-        junk = [d.name for d in sp.iterdir() if d.is_dir() and d.name.startswith("~")]
-        if junk:
-            problems.append(f"base has {len(junk)} leftover distribution dirs: "
-                            + ", ".join(junk))
-            print(f"    FAIL  leftover dirs: {', '.join(junk)}")
-        else:
-            print("    ok    no leftover distribution dirs")
-
-    r = run([str(BASE_PY), "-m", "pip", "check"])
-    if r.returncode == 0:
-        print("    ok    pip check clean")
-    else:
-        problems.append("base pip check failed: " + r.stdout.strip()[:300])
-        print("    FAIL  pip check:")
-        for line in r.stdout.strip().splitlines()[:5]:
-            print("          " + line)
-
-    r = run([str(BASE_PY), "-c", "import sys;print(sys.version.split()[0])"])
-    if r.returncode == 0:
-        print(f"    info  base interpreter Python {r.stdout.strip()}")
-    else:
-        problems.append("base interpreter does not run: "
-                        + r.stdout.strip()[:200])
-        print("    FAIL  base interpreter does not run")
+def iter_scope_dirs(manifest: dict):
+    """Yield ``(entry, project_dir, exists)`` for EVERY declared project."""
+    root = manifest_root(manifest)
+    for entry in ec.project_list(manifest):
+        proj = root / entry["dir"].replace("/", os.sep)
+        yield entry, proj, proj.is_dir()
 
 
-def find_projects() -> list[Path]:
-    found = []
-    for req in ROOT.rglob("requirements*.txt"):
-        if not skipped(req):
-            found.append(req.parent)
-    for proj in ROOT.rglob("pyproject.toml"):
-        if not skipped(proj):
-            found.append(proj.parent)
-    return sorted(set(found))
+def prune(dirs: list[str]) -> list[str]:
+    """Sub-directory names to descend into (excluded trees removed up front)."""
+    return [d for d in dirs
+            if d not in PRUNE_NAMES
+            and not any(d.startswith(p) for p in PRUNE_PREFIXES)]
 
 
-def check_projects(strict: bool = False) -> None:
-    print("\n[2] Project environments")
-    deferred = {**DEFERRED, **load_deferred_extra()}
-    for proj in find_projects():
-        rel = proj.relative_to(ROOT)
-        key = str(rel)
-        if key in deferred:
-            print(f"    skip  {key}\n          {deferred[key]}")
+def iter_launcher_scripts(proj: Path):
+    """Walk ``proj`` for launcher scripts, pruning excluded trees before entry."""
+    for current, dirnames, filenames in os.walk(proj):
+        dirnames[:] = sorted(prune(dirnames))
+        for name in sorted(filenames):
+            if Path(name).suffix.lower() in SCRIPT_SUFFIXES:
+                yield Path(current) / name
+
+
+# ---------------------------------------------------------------------------
+# base interpreter
+# ---------------------------------------------------------------------------
+def resolve_base(explicit: str | None, manifest: dict | None = None
+                 ) -> tuple[Path | None, str | None]:
+    """Resolve a *requested* base interpreter; never fall back.
+
+    Uses ``_envcommon``'s declared-seed/range rules rather than a bare
+    "is it a file / does it run" test: the requested interpreter must match the
+    version requested by the projects it is meant to cover. There is no
+    discovery and no fallback -- an unusable explicit value is an error.
+
+    Returns ``(path, error)``; ``(None, None)`` means "nothing was requested",
+    which is the normal case when merely auditing already-provisioned venvs.
+    """
+    value = (explicit or os.environ.get("AIFORTEM_BASE_PY", "")).strip()
+    if not value:
+        return None, None
+    candidate = Path(value).expanduser()
+    if not candidate.is_file():
+        return None, (f"explicitly requested base interpreter does not exist: {candidate} "
+                      "(fix AIFORTEM_BASE_PY / --base-python, or omit it)")
+    info = ec.interpreter_info(candidate)
+    if not info.get("runs"):
+        return None, (f"explicitly requested base interpreter exists but is not runnable: "
+                      f"{candidate} ({info.get('error')}); refusing to fall back")
+
+    versions = requested_versions(manifest)
+    if versions:
+        declared = versions.get(info.get("version_tuple"))
+        if declared is None:
+            listed = ", ".join(sorted(v for v in versions.values() if v))
+            return None, (
+                f"explicitly requested base interpreter {candidate} runs Python "
+                f"{info.get('version')}, which is not one of the versions the manifest "
+                f"declares ({listed}); refusing to fall back. Point it at a declared "
+                f"version, or omit it.")
+    declared_minor = minor_of(info.get("version_tuple"))
+    if declared_minor is None:
+        return None, (f"explicitly requested base interpreter {candidate} reports an "
+                      f"unparseable version ({info.get('version')!r})")
+    return candidate, None
+
+
+def minor_of(version: tuple | None) -> str | None:
+    if not version or len(version) < 2:
+        return None
+    return f"{version[0]}.{version[1]}"
+
+
+def requested_versions(manifest: dict | None) -> dict[tuple | None, str]:
+    """Map ``version_tuple -> declared version`` across the manifest."""
+    if not manifest:
+        return {}
+    out: dict[tuple | None, str] = {}
+    for entry in ec.project_list(manifest):
+        version = ec.requested_version(manifest, entry)
+        if version:
+            out[ec.parse_version(version)] = version
+    return out
+
+
+def is_default_key(key: str) -> bool:
+    """``default`` / ``default310`` … are fallbacks, not version keys.
+
+    Mirrors :func:`_envcommon.explicit_interpreters`, which treats any key
+    starting with ``default`` as a fallback for projects whose requested version
+    has no explicit entry.
+    """
+    return key.startswith("default")
+
+
+def select_map_entry(entry: dict, manifest: dict, base_map: dict
+                     ) -> tuple[str, Path | None] | None:
+    """Which mapping entry actually covers ``entry`` (``None`` = not covered).
+
+    A version-specific entry wins; a ``default*`` entry applies only when there
+    is no explicit entry for the project's requested version. This mirrors the
+    selection order in ``_envcommon.explicit_interpreters`` so that adding a
+    ``default`` cannot mis-apply it to a project that has its own entry.
+    """
+    version = ec.requested_version(manifest, entry)
+    if version and version in base_map:
+        return (version, base_map[version])
+    for key, path in base_map.items():
+        if is_default_key(key):
+            return (version or "-", path)
+    return None
+
+
+def check_base_map(manifest: dict | None = None
+                   ) -> tuple[list[tuple[str, Path]], str | None]:
+    """Validate every entry of ``AIFORTEM_PYTHONS`` that was explicitly given.
+
+    Version keys must name a version and point at an interpreter of exactly that
+    version. ``default*`` keys are supported (they are the manifest's documented
+    fallback) and are checked **per project they actually cover**: the chosen
+    interpreter must satisfy that project's declared seed and min/max range. A
+    project that has its own version-specific entry is never validated against
+    the default.
+    """
+    raw = os.environ.get("AIFORTEM_PYTHONS", "").strip()
+    if not raw:
+        return [], None
+    try:
+        base_map = ec.parse_base_map(raw)
+    except (Exception, SystemExit) as exc:         # ManifestError is a SystemExit
+        return [], f"AIFORTEM_PYTHONS is unusable: {exc}"
+    if not base_map:
+        return [], (f"AIFORTEM_PYTHONS was set to {raw!r} but no 'version=path' entry "
+                    "could be read; refusing to claim it was verified")
+
+    checked: list[tuple[str, Path]] = []
+    problems: list[str] = []
+
+    # 1) every explicit entry must exist, run, and self-describe correctly
+    for key, path in sorted(base_map.items()):
+        if is_default_key(key):
+            continue                                # validated per covered project below
+        declared = ec.parse_version(key)
+        if declared is None:
+            problems.append(f"AIFORTEM_PYTHONS key {key!r} is neither a version nor a "
+                            "'default' fallback")
             continue
-        venvs = [proj / n for n in VENV_NAMES if (proj / n).is_dir()]
-        sub_locks = [p for p in proj.glob("requirements/*lock*") if p.is_file()]
-        if not (proj / "requirements.txt").is_file() and not venvs and not sub_locks:
-            # pyproject-only project, no env expected -- print the reason
-            # instead of skipping silently
-            print(f"    skip  {rel}: pyproject-only (no requirements.txt, "
-                  "no venv, no requirements/ lock) - no env expected")
+        if not path.is_file():
+            problems.append(f"AIFORTEM_PYTHONS {key} -> {path} (does not exist)")
             continue
+        info = ec.interpreter_info(path)
+        if not info.get("runs"):
+            problems.append(f"AIFORTEM_PYTHONS {key} -> {path} "
+                            f"(does not run: {info.get('error')})")
+            continue
+        if info.get("version_tuple") != declared:
+            problems.append(f"AIFORTEM_PYTHONS {key} -> {path} "
+                            f"(runs Python {info.get('version')}, key says {key})")
+            continue
+        checked.append((key, path))
 
-        def _is_lock_candidate(p):
-            try:
-                return p.is_file() and "lock" in p.name.lower() \
-                    and p.suffix in (".txt", ".lock")
-            except OSError:
-                # Windows 保留设备名（如误生成的 `nul`）stat 会抛 WinError 1；
-                # 跳过该条目而不是让整个自检崩溃（审计工单 109 机制）
-                return False
-
-        locks = [p for p in proj.iterdir() if _is_lock_candidate(p)]
-        locks += sub_locks
-
-        if not venvs:
-            # 审计 123：锁文件在场而 venv 缺席 = 「环境尚未建立」而非「隔离
-            # 约定被破坏」——新克隆的工作区上这是必然的初始状态（实测满屏
-            # no venv 且 exit 1），默认降级为 info，不计入违规；--strict
-            # 恢复严格口径。连锁文件都没有则仍是 FAIL（声明了依赖却无锁）。
-            if locks and not strict:
-                print(f"    info  {rel}: no venv yet - environment not "
-                      "provisioned on this clone (expected on a fresh "
-                      "checkout; provision with .tools/provision-envs.py, "
-                      "or pass --strict to enforce)")
+    # 2) each declared project must be covered by an entry that actually fits it
+    if manifest:
+        info_cache: dict[str, dict] = {}
+        for entry in ec.project_list(manifest):
+            selection = select_map_entry(entry, manifest, base_map)
+            if selection is None:
                 continue
-            issues = ["no venv"]
-        else:
-            issues = []
-        if not locks:
-            issues.append("no lock file")
-        if issues:
-            problems.append(f"{rel}: {', '.join(issues)}")
-            print(f"    FAIL  {rel}: {', '.join(issues)}")
+            label, path = selection
+            if path is None:
+                continue
+            key = f"{entry['name']}"
+            if not path.is_file():
+                problems.append(f"{key}: the entry covering it ({label} -> {path}) "
+                                "does not exist")
+                continue
+            cache_key = str(path)
+            if cache_key not in info_cache:
+                info_cache[cache_key] = ec.interpreter_info(path)
+            info = info_cache[cache_key]
+            if not info.get("runs"):
+                problems.append(f"{key}: the entry covering it ({label} -> {path}) "
+                                f"does not run: {info.get('error')}")
+                continue
+            version = ec.requested_version(manifest, entry)
+            pmin = (entry.get("python") or {}).get("min")
+            pmax = (entry.get("python") or {}).get("max")
+            if not ec.satisfies(info.get("version_tuple"), pmin, pmax):
+                problems.append(
+                    f"{key}: the entry covering it ({label} -> Python "
+                    f"{info.get('version')}) is outside the declared range "
+                    f"[{pmin or '-'}, {pmax or '-'})")
+                continue
+            if version and info.get("version_tuple") != ec.parse_version(version):
+                problems.append(
+                    f"{key}: the entry covering it ({label} -> Python "
+                    f"{info.get('version')}) is not the declared seed {version}"
+                    + (" (add an explicit '"
+                       f"{version}=<path>' entry, or fix the default)"))
+                continue
+            if (label, path) not in checked:
+                checked.append((label, path))
+
+    if problems:
+        return checked, ("AIFORTEM_PYTHONS does not cover the declared projects; "
+                         "refusing to fall back:\n"
+                         + "\n".join(f"      - {p}" for p in problems))
+    return checked, None
+
+
+# ---------------------------------------------------------------------------
+# checks
+# ---------------------------------------------------------------------------
+def check_projects(manifest: dict, findings: Findings, strict: bool) -> None:
+    root = manifest_root(manifest)
+    print("[1] Declared project environments (manifest scope)")
+    for entry, proj, exists in iter_scope_dirs(manifest):
+        name = entry["name"]
+        rel = display(proj, root)
+        venv_name = entry["venv"]
+        py = proj / venv_name / "Scripts" / "python.exe"
+        lock_names = ec.install_chain(entry)
+        locks = [proj / n for n in lock_names if (proj / n).is_file()]
+
+        if not exists:
+            # Must never vanish from the report: a declared project that is not
+            # checked out is a real finding under --strict.
+            if strict:
+                findings.fail(f"{rel}: declared project directory is missing (strict)")
+                print(f"    FAIL  {rel}: project directory missing (strict)")
+            else:
+                print(f"    missing {rel}: declared in the manifest but not present "
+                      "on this checkout")
             continue
 
-        detail = []
-        for v in venvs:
-            cfg = v / "pyvenv.cfg"
-            if not cfg.is_file():
-                problems.append(f"{rel}\\{v.name}: missing pyvenv.cfg")
-                detail.append(f"{v.name}=BROKEN")
-                continue
+        if not py.is_file():
+            if strict:
+                findings.fail(f"{rel}: no venv (strict)")
+                print(f"    FAIL  {rel}: no venv at {venv_name} (strict)")
+            else:
+                print(f"    info  {rel}: not provisioned on this clone (no {venv_name})")
+            if not locks and lock_names:
+                findings.fail(f"{rel}: declared install chain {lock_names} has no lock file")
+                print(f"    FAIL  {rel}: missing lock {lock_names}")
+            continue
+
+        detail: list[str] = []
+        cfg = proj / venv_name / "pyvenv.cfg"
+        if not cfg.is_file():
+            findings.fail(f"{rel}: missing pyvenv.cfg")
+            detail.append("BROKEN")
+        else:
             text = cfg.read_text(encoding="utf-8", errors="replace")
-            if "include-system-site-packages" not in text or \
-                    "false" not in text.split("include-system-site-packages")[1][:20]:
-                problems.append(f"{rel}\\{v.name}: leaks system site-packages")
-                detail.append(f"{v.name}=LEAKY")
-                continue
-            py = v / "Scripts" / "python.exe"
-            if not py.is_file():
-                problems.append(f"{rel}\\{v.name}: missing Scripts/python.exe")
-                detail.append(f"{v.name}=NO_PYTHON")
-                continue
-            r = run([str(py), "-c", "import sys;print(sys.version.split()[0])"])
-            ver = r.stdout.strip() if r.returncode == 0 else "BROKEN"
-            if ver == "BROKEN":
-                problems.append(f"{rel}\\{v.name}: interpreter does not run")
-            detail.append(f"{v.name}={ver}")
-        print(f"    ok    {rel}  [{' '.join(detail)}]  lock={locks[0].name}")
+            tail = text.split("include-system-site-packages", 1)
+            if len(tail) < 2 or "false" not in tail[1][:20].lower():
+                findings.fail(f"{rel}: venv leaks system site-packages")
+                detail.append("LEAKY")
+            else:
+                detail.append("isolated")
 
-
-def check_scripts() -> None:
-    print("\n[3] Scripts invoking bare python")
-    hits = 0
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in SCRIPT_SUFFIXES:
-            continue
-        if skipped(path):
-            continue
-        for i, line in enumerate(decode(path).splitlines(), 1):
-            if not BARE_PYTHON.search(line) or SAFE_LINE.search(line):
-                continue
-            problems.append(f"{path.relative_to(ROOT)}:{i}: {line.strip()}")
-            print(f"    FAIL  {path.relative_to(ROOT)}:{i}")
-            print(f"          {line.strip()}")
-            hits += 1
-    if not hits:
-        print("    ok    no bare-python fallbacks found")
-
-
-def check_pth() -> None:
-    """``.pth`` files must stay pure ASCII.
-
-    CPython's ``site.py`` reads ``.pth`` files using the *locale* encoding, so a
-    path containing Chinese characters is readable only in one mode: written as
-    GBK it breaks under ``-X utf8``, written as UTF-8 it breaks in the default
-    mode. A pure-ASCII ``.pth`` (deriving the path at runtime) works in both.
-    """
-    print("\n[4] .pth files inside venvs")
-    bad = []
-    for p in ROOT.rglob("*.pth"):
-        if "site-packages" not in p.parts or skipped(p):
-            continue
-        if any(b >= 128 for b in p.read_bytes()):
-            bad.append(p)
-    if bad:
-        for p in bad:
-            problems.append(f"non-ASCII .pth: {p.relative_to(ROOT)}")
-            print(f"    FAIL  {p.relative_to(ROOT)}")
-        print("          -> rewrite it as an ASCII-only `import` line")
-    else:
-        print("    ok    all .pth files are ASCII-only")
-
-
-def check_pip_config() -> None:
-    """The user-level pip.ini must stay pure ASCII and must actually parse.
-
-    pip reads its config using the system locale encoding (cp936 here), so any
-    non-ASCII character makes pip reject the whole file with
-    "Configuration file contains invalid cp936 characters" -- silently losing
-    the mirror setting. Verify by asking pip to parse it.
-    """
-    print("\n[6] pip user-level configuration")
-    cfg = Path.home() / "AppData" / "Roaming" / "pip" / "pip.ini"
-    if not cfg.is_file():
-        print("    info  no user-level pip.ini (not required)")
-        return
-    if any(b >= 128 for b in cfg.read_bytes()):
-        problems.append(f"pip.ini is not ASCII-only: {cfg}")
-        print(f"    FAIL  {cfg} contains non-ASCII bytes")
-        print("          -> pip will reject the whole file; keep it ASCII-only")
-        return
-    if BASE_PY is None:
-        problems.append("base interpreter not found "
-                        f"（可用 {BASE_PY_ENV_VAR} 指定）")
-        print("    FAIL  base interpreter not found; pip config parse check skipped")
-        return
-    r = run([str(BASE_PY), "-m", "pip", "config", "list"])
-    if r.returncode != 0 or "invalid" in r.stdout.lower():
-        problems.append("pip rejected its configuration file")
-        print("    FAIL  pip rejects the config:")
-        for line in r.stdout.strip().splitlines()[:3]:
-            print("          " + line)
-        return
-    entries = [l.strip() for l in r.stdout.splitlines() if "=" in l]
-    print(f"    ok    {len(entries)} setting(s) parsed")
-    for line in entries:
-        print(f"          {line}")
-
-
-def check_lock_fidelity() -> None:
-    """For auto-generated locks, verify the venv still matches the lock.
-
-    Only locks carrying the generated header are compared: hand-maintained
-    locks (pip-compile style, curated subsets, cu128 variants) legitimately
-    describe a different set than what is currently installed.
-
-    Coverage is the full set of lock files -- top-level ``requirements*.lock*``
-    plus everything inside a project's ``requirements/`` subdirectory (e.g.
-    the 原子中心识别模型开发 locks) -- checked against every venv name in
-    VENV_NAMES, not just the ``requirements.lock.txt`` + ``.venv`` pair. A
-    lock passes when at least one project-local venv's ``pip freeze`` matches
-    it exactly.
-    """
-    print("\n[5] venv matches its auto-generated lock")
-    checked = 0
-    hand_maintained: list[Path] = []
-
-    def is_lock_candidate(p: Path) -> bool:
-        try:
-            if not p.is_file():
-                return False
-        except OSError:
-            # Windows reserved names (e.g. a stray `nul`) raise WinError 1
-            # on stat; ignore them instead of aborting the whole audit
-            return False
-        return ("lock" in p.name.lower() and p.suffix in (".txt", ".lock")
-                and (p.parent.name == "requirements"
-                     or p.name.startswith("requirements"))
-                and not skipped(p))
-
-    lock_paths = sorted(p for p in ROOT.rglob("*") if is_lock_candidate(p))
-    for lock in lock_paths:
-        text = lock.read_text(encoding="utf-8", errors="replace")
-        if "自动生成，请勿手改" not in text:
-            hand_maintained.append(lock)
-            continue
-        proj = lock.parent.parent if lock.parent.name == "requirements" \
-            else lock.parent
-        rel = proj.relative_to(ROOT)
-        locked = sorted({l.strip() for l in text.splitlines()
-                         if l.strip() and not l.startswith("#")})
-        venvs = [proj / n for n in VENV_NAMES
-                 if (proj / n / "Scripts" / "python.exe").is_file()]
-        if not venvs:
-            print(f"    info  {rel}: {lock.name} but no runnable venv "
-                  "(venv presence is [2]'s job)")
-            continue
-        matched = None
-        best_diff: set[str] | None = None
-        for venv in venvs:
-            r = run([str(venv / "Scripts" / "python.exe"), "-m", "pip", "freeze"])
-            # Editable installs of the project itself are reported by pip freeze as
-            # a "# Editable install ..." comment plus an "-e <path>" line. They are
-            # not third-party dependencies and are deliberately absent from the
-            # lock, so they must be filtered out or every editable project would
-            # report a false mismatch. (The path is written in the locale encoding,
-            # so it is not even valid UTF-8 -- run() already decodes with
-            # errors="replace", and we drop the line right after.)
-            installed = sorted({
-                l.strip() for l in r.stdout.splitlines()
-                if l.strip() and not l.startswith("#") and not l.startswith("-e ")
-                and re.split(r"[=<>\s]", l.strip(), 1)[0].lower()
-                not in ("pip", "setuptools", "wheel")
-            })
-            diff = set(installed) ^ set(locked)
-            if not diff:
-                matched = venv
-                break
-            if best_diff is None or len(diff) < len(best_diff):
-                best_diff = diff
-        checked += 1
-        if matched is not None:
-            print(f"    ok    {rel} ({len(locked)} pkgs, {matched.name})")
+        info = ec.interpreter_info(py)
+        if not info.get("runs"):
+            findings.fail(f"{rel}: interpreter does not run ({info.get('error')})")
+            detail.append("NO_RUN")
         else:
-            problems.append(f"{rel}: no venv in {', '.join(VENV_NAMES)} matches "
-                            f"{lock.name} ({len(best_diff)} package(s) differ)")
-            print(f"    FAIL  {rel}: nothing in {', '.join(VENV_NAMES)} "
-                  f"matches {lock.name}")
-            for item in sorted(best_diff)[:6]:
-                print(f"          {item}")
-    if hand_maintained:
-        shown = ", ".join(str(p.relative_to(ROOT)) for p in hand_maintained[:4])
-        more = "" if len(hand_maintained) <= 4 \
-            else f" ... (+{len(hand_maintained) - 4} more)"
-        print(f"    info  {len(hand_maintained)} hand-maintained lock(s) not "
-              f"compared (no auto header): {shown}{more}")
-    if not checked:
-        print("    info  no auto-generated locks found")
+            detail.append(info.get("version") or "?")
+            pmin = (entry.get("python") or {}).get("min")
+            pmax = (entry.get("python") or {}).get("max")
+            if not ec.satisfies(ec.parse_version(info.get("version")), pmin, pmax):
+                findings.fail(f"{rel}: Python {info.get('version')} outside "
+                              f"declared range {pmin}..{pmax}")
+                detail.append("OUT_OF_RANGE")
+
+        bad = any(d in ("BROKEN", "LEAKY", "NO_RUN", "OUT_OF_RANGE") for d in detail)
+        lock_note = locks[0].name if locks else "NO LOCK"
+        print(f"    {'FAIL ' if bad else 'ok   '} {rel}  [{' '.join(detail)}]  "
+              f"lock={lock_note}")
+        if not locks and lock_names:
+            findings.fail(f"{rel}: no lock file among {lock_names}")
+
+
+def closure_report(py: Path, locked: dict[str, str]) -> dict:
+    """Run the shared metadata probe once and interpret it via ``_envcommon``.
+
+    A single probe call: the interpreter is asked for the whole answer in one go
+    (no fragile two-round protocol). Any failure -- non-zero exit, unparseable
+    or schema-mismatched output, unavailable ``packaging`` -- yields
+    ``complete=None`` (unmeasured), never ``True``.
+    """
+    command = ec.closure_report_command(py, locked)
+    proc = run(command, cwd=py.parent.parent)
+    if proc.returncode != 0:
+        return {"error": f"closure probe exited {proc.returncode}: "
+                         f"{(proc.stdout or '').strip()[:160]}", "complete": None}
+    return ec.parse_closure_probe(proc.stdout or "", locked)
+
+
+def check_locks(manifest: dict, findings: Findings) -> list[dict]:
+    root = manifest_root(manifest)
+    print("\n[2] Declared pins + dependency-closure coverage")
+    summary: list[dict] = []
+    for entry, proj, exists in iter_scope_dirs(manifest):
+        name = entry["name"]
+        rel = display(proj, root)
+        if not exists:
+            continue
+        locks = [proj / n for n in ec.install_chain(entry) if (proj / n).is_file()]
+        py = proj / entry["venv"] / "Scripts" / "python.exe"
+        if not locks:
+            continue
+        if not py.is_file():
+            print(f"    info  {rel}: lock present, venv not provisioned (pin check skipped)")
+            summary.append({"project": name, "dir": rel, "status": "no-venv"})
+            continue
+
+        locked: dict[str, str] = {}
+        for lock in locks:
+            locked.update(ec.lock_pins(lock))
+        installed, _ = ec.installed_pins(py, proj)
+        comparison = ec.compare_pins(locked, installed)
+        mismatched = comparison.get("mismatched") or {}
+        missing = comparison.get("missing") or []
+
+        if mismatched or missing:
+            findings.fail(f"{rel}: declared pins differ from installed "
+                          f"(mismatch={sorted(mismatched)[:4]}, missing={missing[:4]})")
+            print(f"    FAIL  {rel}: pin mismatch={sorted(mismatched)[:4]} "
+                  f"missing={missing[:4]}")
+            summary.append({"project": name, "dir": rel, "status": "pin-mismatch",
+                            "mismatch": mismatched, "missing": missing})
+            continue
+
+        closure = closure_report(py, locked)
+        row = {"project": name, "dir": rel, "locked": len(locked),
+               "installed": len(installed), "closure": closure}
+        if closure.get("complete") is True:
+            row["status"] = "closure-complete"
+            print(f"    ok    {rel}: {len(locked)} declared pins match; "
+                  "dependency closure fully pinned")
+        elif closure.get("error"):
+            row["status"] = "closure-unmeasured"
+            print(f"    UNMEASURED {rel}: {len(locked)} declared pins match, but the "
+                  f"closure could not be measured ({closure['error'][:80]})")
+        elif closure.get("broken"):
+            row["status"] = "broken"
+            broken = closure["broken"]
+            findings.fail(f"{rel}: dependency problem(s): {broken[:6]}")
+            print(f"    FAIL  {rel}: installed dependency problem(s): {broken[:6]}")
+        else:
+            unpinned = closure.get("unpinned") or []
+            findings.note(f"{rel}: {len(unpinned)} dependency(ies) installed correctly "
+                          f"but not pinned ({', '.join(unpinned[:6])})")
+            print(f"    info  {rel}: {len(locked)} declared pins match, closure "
+                  f"INCOMPLETE ({len(unpinned)} unpinned: {', '.join(unpinned[:6])}) "
+                  "- to be locked in S1d")
+            row["status"] = "incomplete-closure"
+        summary.append(row)
+    return summary
+
+
+def check_scripts(manifest: dict, findings: Findings) -> None:
+    root = manifest_root(manifest)
+    print("\n[3] Launcher scripts inside declared projects")
+    hits = 0
+    for entry, proj, exists in iter_scope_dirs(manifest):
+        if not exists:
+            continue
+        for path in iter_launcher_scripts(proj):
+            for i, line in enumerate(decode(path).splitlines(), 1):
+                if not BARE_PYTHON.search(line) or SAFE_LINE.search(line):
+                    continue
+                findings.fail(f"{display(path, root)}:{i}: bare python")
+                print(f"    FAIL  {display(path, root)}:{i}")
+                print(f"          {line.strip()}")
+                hits += 1
+    if not hits:
+        print("    ok    no bare-python fallbacks in declared projects")
+
+
+def check_pth(manifest: dict, findings: Findings) -> None:
+    root = manifest_root(manifest)
+    print("\n[4] .pth files in declared venvs")
+    bad = []
+    for entry, proj, exists in iter_scope_dirs(manifest):
+        if not exists:
+            continue
+        site_packages = proj / entry["venv"] / "Lib" / "site-packages"
+        if not site_packages.is_dir():
+            continue
+        for p in sorted(site_packages.glob("*.pth")):
+            if p.name.endswith(".orig"):
+                continue
+            if any(b >= 128 for b in p.read_bytes()):
+                bad.append(p)
+    for p in bad:
+        findings.fail(f"non-ASCII .pth: {display(p, root)}")
+        print(f"    FAIL  {display(p, root)}")
+    if bad:
+        print("          -> .tools/normalise-pth.py rewrites the target editable file")
+    else:
+        print("    ok    all .pth files in declared venvs are ASCII-only")
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    strict = "--strict" in args
-    unknown = [a for a in args if a != "--strict"]
-    if unknown:
-        print(f"unknown arguments: {' '.join(unknown)} "
-              "(supported: --strict)")
-        return 2
-    mode = "strict" if strict else "default (missing venvs are info, 审计 123)"
+    global ROOT
+    parser = argparse.ArgumentParser(description="Manifest-scoped environment audit")
+    parser.add_argument("--strict", action="store_true",
+                        help="also fail when a declared project is absent or has no venv")
+    parser.add_argument("--base-python", default=None,
+                        help="explicit base interpreter (missing/unrunnable is a hard error)")
+    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--json", default=None)
+    args = parser.parse_args(argv)
+
+    ec.ensure_utf8_stdio()
+    manifest = ec.load_manifest(Path(args.manifest) if args.manifest else None)
+    ROOT = manifest_root(manifest)
+    findings = Findings()
+
     print(f"workspace : {ROOT}")
-    print(f"mode      : {mode}")
+    print(f"scope     : {len(ec.project_list(manifest))} declared projects "
+          f"(backups/.venv.* and history trees pruned)")
+    print(f"mode      : {'strict' if args.strict else 'default'}")
     print("=" * 74)
-    check_base()
-    check_projects(strict)
-    check_scripts()
-    check_pth()
-    check_lock_fidelity()
-    check_pip_config()
+
+    base_py, base_error = resolve_base(args.base_python, manifest)
+    checked_map, map_error = check_base_map(manifest)
+    if base_error:
+        findings.fail(base_error)
+        print(f"[0] base interpreter\n    FAIL  {base_error}")
+    elif base_py is not None:
+        print(f"[0] base interpreter\n    ok    requested base runs: {base_py}")
+    if map_error:
+        findings.fail(map_error)
+        print(f"[0] base map\n    FAIL  {map_error}")
+    elif checked_map:
+        print(f"[0] base map\n    ok    AIFORTEM_PYTHONS entries verified: "
+              f"{', '.join(v for v, _ in checked_map)}")
+
+    check_projects(manifest, findings, args.strict)
+    lock_summary = check_locks(manifest, findings)
+    check_scripts(manifest, findings)
+    check_pth(manifest, findings)
+
     print("=" * 74)
-    if problems:
-        print(f"RESULT: {len(problems)} problem(s) found")
+    by_status: dict[str, int] = {}
+    for row in lock_summary:
+        by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+    if by_status:
+        print("lock coverage: " + ", ".join(f"{k}={v}" for k, v in sorted(by_status.items())))
+    if findings.notes:
+        print(f"notes: {len(findings.notes)}")
+        for note in findings.notes[:25]:
+            print(f"  - {note}")
+    if args.json:
+        ec.write_json(Path(args.json), {
+            "workspace": str(ROOT),
+            "scope": "manifest projects only (directory-pruned)",
+            "strict": args.strict,
+            "problems": findings.problems,
+            "notes": findings.notes,
+            "locks": lock_summary,
+        })
+    if findings.problems:
+        print(f"RESULT: {len(findings.problems)} problem(s) found")
         return 1
     print("RESULT: clean - environment isolation convention is intact")
     return 0

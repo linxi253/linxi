@@ -75,7 +75,7 @@ def test_delayed_video_stream_start_is_not_padded_with_duplicates(
     assert results[0].frame_count == 10
     assert results[0].timeline_source == "model"
 
-    with Path(results[0].frame_manifest_path).open(newline="", encoding="utf-8") as handle:
+    with Path(results[0].frame_manifest_path).open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 10
     assert float(rows[0]["stream_start_time_s"]) == pytest.approx(1.0, abs=1e-3)
@@ -269,7 +269,7 @@ def test_true_vfr_gets_measured_timeline_and_no_fake_interval(
     assert "finterval" not in metadata
     assert "fps" not in metadata
 
-    with Path(results[0].frame_manifest_path).open(newline="", encoding="utf-8") as handle:
+    with Path(results[0].frame_manifest_path).open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
     pts = [float(row["source_pts_s"]) for row in rows]
     deltas = [round(b - a, 3) for a, b in zip(pts, pts[1:])]

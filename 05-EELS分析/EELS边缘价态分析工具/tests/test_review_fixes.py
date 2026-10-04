@@ -128,6 +128,303 @@ def test_cli_config_run_control_not_clobbered(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# R9：--config 复跑必须真正走到 run_analysis
+# ---------------------------------------------------------------------------
+
+
+def _saved_config_path(tmp_path, **overrides):
+    """写出一份可被 --config 读取的保存配置，返回其路径。"""
+    import json
+
+    source = tmp_path / "in.dm4"
+    source.write_bytes(b"synthetic")
+    refs = []
+    for index in range(3):
+        path = tmp_path / f"cu{index}.dm4"
+        path.write_bytes(b"ref")
+        refs.append(ReferenceSpec(f"Cu{index}", index, path))
+    config = _base_config(tmp_path, input_path=source, references=tuple(refs), **overrides)
+    saved = tmp_path / "analysis_config.json"
+    saved.write_text(json.dumps(config.to_dict(), ensure_ascii=False), encoding="utf-8")
+    return saved, config
+
+
+def test_cli_config_reaches_run_analysis(tmp_path, monkeypatch) -> None:
+    """回归 2026-10-03 R9：--config 复跑此前在 run_analysis 之前就 TypeError。
+
+    ``_run`` 曾把 survey/low/high/surface_orientation 显式传给 AnalysisConfig，
+    同时 ``_config_overrides`` 又从保存配置里带回同名字段，于是报
+    ``got multiple values for keyword argument 'survey_dataset'``。本用例真正调用
+    ``cli_main`` 并断言 run_analysis 被调用、方向来自显式 CLI。
+    """
+    from eels_edge_analyzer import cli
+
+    saved, _config = _saved_config_path(tmp_path)
+    seen: list = []
+
+    monkeypatch.setattr(cli, "run_analysis",
+                        lambda config, **kw: seen.append(config) or object())
+    monkeypatch.setattr(cli, "export_artifacts",
+                        lambda *a, **kw: {"report": tmp_path / "r.md"})
+
+    rc = cli.main(["--config", str(saved), "--orientation", "right"])
+
+    assert rc == 0
+    assert seen, "run_analysis 必须被真正调用"
+    assert seen[0].surface_orientation == "right"
+
+
+def test_cli_config_keeps_saved_dataset_indices(tmp_path, monkeypatch) -> None:
+    """保存配置里的数据对象编号必须保留，而不是被 CLI 默认 None 冲掉。"""
+    from eels_edge_analyzer import cli
+
+    saved, config = _saved_config_path(
+        tmp_path, survey_dataset=4, low_loss_dataset=5, high_loss_dataset=6)
+    seen: list = []
+    monkeypatch.setattr(cli, "run_analysis",
+                        lambda c, **kw: seen.append(c) or object())
+    monkeypatch.setattr(cli, "export_artifacts",
+                        lambda *a, **kw: {"report": tmp_path / "r.md"})
+
+    assert cli.main(["--config", str(saved)]) == 0
+    assert seen[0].survey_dataset == config.survey_dataset
+    assert seen[0].low_loss_dataset == config.low_loss_dataset
+    assert seen[0].high_loss_dataset == config.high_loss_dataset
+
+
+def test_cli_explicit_value_beats_saved_config(tmp_path, monkeypatch) -> None:
+    """显式 CLI > 保存配置；且 along_surface_segment_nm 也走同一优先级。"""
+    from eels_edge_analyzer import cli
+
+    saved, config = _saved_config_path(tmp_path, fit_min_ev=925.0)
+    seen: list = []
+    monkeypatch.setattr(cli, "run_analysis",
+                        lambda c, **kw: seen.append(c) or object())
+    monkeypatch.setattr(cli, "export_artifacts",
+                        lambda *a, **kw: {"report": tmp_path / "r.md"})
+
+    rc = cli.main(["--config", str(saved), "--fit-min-ev", "930",
+                   "--along-surface-segment-nm", "7.5"])
+    assert rc == 0
+    assert seen[0].fit_min_ev == 930.0
+    assert seen[0].along_surface_segment_nm == 7.5
+    assert seen[0].fit_min_ev != config.fit_min_ev
+
+
+def test_cli_config_missing_input_is_reported(tmp_path, capsys) -> None:
+    """保存配置指向的输入缺失时，错误码与提示必须是可诊断的。"""
+    import json
+
+    saved = tmp_path / "analysis_config.json"
+    saved.write_text(json.dumps({"input_path": str(tmp_path / "gone.dm4"),
+                                 "output_dir": str(tmp_path / "out"),
+                                 "references": []}), encoding="utf-8")
+    from eels_edge_analyzer import cli
+    rc = cli.main(["--config", str(saved)])
+    assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# R1：配对能量轴校验（色散一致但起点可不同；非均匀/非有限必须拒绝）
+# ---------------------------------------------------------------------------
+
+
+def _axis(size: int, step: float, origin: float) -> np.ndarray:
+    return np.arange(size, dtype=float) * step + origin
+
+
+def test_paired_axes_accept_same_dispersion_different_origin() -> None:
+    """同色散、不同能量起点必须通过：低损含 ZLP、高损从吸收边开始是常态。"""
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    validate_paired_energy_axes(_axis(64, 0.25, -5.0), _axis(64, 0.25, 900.0))
+
+
+def test_paired_axes_reject_unequal_dispersion() -> None:
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    with pytest.raises(ValueError, match="色散不一致"):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0), _axis(64, 1.0, 900.0))
+
+
+def test_paired_axes_reject_channel_count_mismatch() -> None:
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    with pytest.raises(ValueError, match="通道数不一致"):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0), _axis(32, 0.25, 900.0))
+
+
+def test_paired_axes_reject_non_uniform_sampling() -> None:
+    """非均匀采样必须被拒绝，而不是被静默当成等间距使用。"""
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    high = _axis(64, 0.25, 900.0)
+    high[20:] += 0.5
+    with pytest.raises(ValueError, match="不均匀"):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0), high)
+
+
+def test_paired_axes_reject_non_finite_and_short() -> None:
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    high = _axis(64, 0.25, 900.0)
+    high[3] = np.nan
+    with pytest.raises(ValueError, match="非有限"):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0), high)
+
+    with pytest.raises(ValueError, match="只有 1 个通道"):
+        validate_paired_energy_axes(np.array([0.0]), np.array([1.0]))
+
+
+def test_paired_axes_reject_non_positive_step_and_2d() -> None:
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    descending = _axis(64, 0.25, 900.0)[::-1].copy()
+    with pytest.raises(ValueError):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0), descending)
+
+    with pytest.raises(ValueError, match="一维"):
+        validate_paired_energy_axes(_axis(64, 0.25, -5.0),
+                                    np.zeros((4, 16), dtype=float))
+
+
+def test_paired_axes_tolerate_float32_representation_noise() -> None:
+    """float32 存储的标称色散不得被误判为不一致。
+
+    两条轴同为 0.25 eV/ch、只有能量起点不同，但都经 float32 往返；在 1000 eV
+    量级上 float32 的相对误差约 1e-7，绝对误差约 1e-4 eV。校验必须容忍这种
+    表示噪声，否则合法数据会被误拒。
+    """
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    step = np.float32(0.25)
+    low = (np.arange(1000, dtype=np.float32) * step - np.float32(50.0)).astype(float)
+    high = (np.arange(1000, dtype=np.float32) * step + np.float32(900.0)).astype(float)
+    # 前提：两条轴的名义色散确实相同（只差浮点表示）
+    assert abs(np.median(np.diff(low)) - np.median(np.diff(high))) < 1e-3
+    validate_paired_energy_axes(low, high)   # 不应抛异常
+
+
+@pytest.mark.parametrize("step_low,step_high,origin", [
+    (0.01, 0.0103, 900.0),      # 3% 失配（返工中曾漏过）
+    (0.001, 0.0012, 900.0),     # 20% 失配（返工中曾漏过）
+    (0.01, 0.011, 3000.0),      # 10% 失配（返工中曾漏过）
+])
+def test_paired_axes_reject_small_relative_mismatches(
+        step_low: float, step_high: float, origin: float) -> None:
+    """小相对失配必须被拒绝——容差不得随原点量级无界放大。
+
+    返工的中间实现把端点估计误差按 4*quantum 计（未除以 n-1），使容差可接近
+    100% 步长，于是上表三例全部错误通过。这里逐个钉住。
+    """
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    low = np.arange(128, dtype=float) * step_low
+    high = (origin + np.arange(128, dtype=float) * step_high).astype(np.float32).astype(float)
+    with pytest.raises(ValueError):
+        validate_paired_energy_axes(low, high)
+
+
+def test_paired_axes_reject_huge_origin_with_local_jump() -> None:
+    """超大原点 + 半数通道跳变必须被拒绝（不得被精度容差吞掉）。"""
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    low = np.arange(128, dtype=float) * 0.25
+    high = (1e6 + np.arange(128, dtype=float) * 0.25).astype(np.float32).astype(float)
+    high[60:] += 0.125
+    with pytest.raises(ValueError):
+        validate_paired_energy_axes(low, high)
+
+
+def test_paired_axes_precision_limit_is_reported_honestly() -> None:
+    """精度不足时给出的必须是"坐标精度不足"，不能谎称色散确实不等。"""
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    low = np.arange(128, dtype=float) * 0.001
+    high = (900.0 + np.arange(128, dtype=float) * 0.001).astype(np.float32).astype(float)
+    with pytest.raises(ValueError, match="坐标精度不足"):
+        validate_paired_energy_axes(low, high)
+
+
+@pytest.mark.parametrize("step", [0.25, 0.5, 1.0])
+def test_paired_axes_accept_float32_and_float64_eels_ranges(step: float) -> None:
+    """常规 EELS 色散在 float32/float64、不同原点下都必须接受。"""
+    from eels_edge_analyzer.models import validate_paired_energy_axes
+
+    for dtype in (np.float64, np.float32):
+        low = (-60.0 + np.arange(128) * step).astype(dtype).astype(float)
+        high = (900.0 + np.arange(128) * step).astype(dtype).astype(float)
+        validate_paired_energy_axes(low, high)
+
+
+def test_single_axis_validation_is_reusable() -> None:
+    """单轴校验是公开接口，供只处理低损谱的调用方复用。"""
+    from eels_edge_analyzer.models import validate_single_energy_axis
+
+    assert validate_single_energy_axis(np.arange(64) * 0.5, "低损对象") == 0.5
+    with pytest.raises(ValueError, match="非有限值"):
+        validate_single_energy_axis(np.array([0.0, np.nan, 1.0]), "低损对象")
+    with pytest.raises(ValueError, match="严格递增"):
+        validate_single_energy_axis(np.array([0.0, 1.0, 0.5]), "低损对象")
+    nonuniform = np.arange(64) * 0.5
+    nonuniform[10:] += 0.25
+    with pytest.raises(ValueError, match="不均匀"):
+        validate_single_energy_axis(nonuniform, "低损对象")
+
+
+def test_deconvolution_validates_low_axis_without_high_axis() -> None:
+    """不传高损轴时，低损轴仍必须被完整校验（兑现 docstring 的承诺）。"""
+    high = np.ones((32, 2, 2), dtype=float)
+    low = np.ones((32, 2, 2), dtype=float)
+    bad = np.arange(32, dtype=float) * 0.25
+    bad[5] = np.nan
+    with pytest.raises(ValueError, match="非有限值"):
+        fourier_ratio_deconvolution_multi(high, low, bad, (0.003,),
+                                          (-30.0, -10.0), (-3.0, 3.0))
+
+
+def test_deconvolution_rejects_axis_length_mismatch_with_si() -> None:
+    """两条轴彼此等长但与 SI 通道数不符时，必须给出可诊断的错误。"""
+    high = np.ones((32, 2, 2), dtype=float)
+    low = np.ones((32, 2, 2), dtype=float)
+    short = np.arange(16, dtype=float) * 0.25
+    with pytest.raises(ValueError, match="与 SI 能量通道数"):
+        fourier_ratio_deconvolution_multi(high, low, short, (0.003,),
+                                          (-30.0, -10.0), (-3.0, 3.0))
+
+
+def test_deconvolution_checks_paired_axes_when_high_axis_given() -> None:
+    """公开 processing 接口传入高损轴时必须校验；不传则不声称已检查。"""
+    high = np.ones((32, 2, 2), dtype=float)
+    low = np.ones((32, 2, 2), dtype=float)
+    low_axis = _axis(32, 0.25, -4.0)
+    with pytest.raises(ValueError, match="色散不一致"):
+        fourier_ratio_deconvolution(high, low, low_axis, 0.003, (-30.0, -10.0),
+                                    (-3.0, 3.0), high_energy_ev=_axis(32, 1.0, 900.0))
+
+
+def test_run_analysis_rejects_mismatched_dispersion(tmp_path, monkeypatch) -> None:
+    """端到端：run_analysis 必须在去卷积之前拒绝不等色散（R1 反例）。"""
+    from eels_edge_analyzer import pipeline
+    from eels_edge_analyzer.models import LoadedDataset
+
+    config = _base_config(tmp_path)
+    low = LoadedDataset(1, np.ones((32, 2, 2)),
+                        (_axis(32, 0.25, -4.0), np.arange(2), np.arange(2)),
+                        ("eV", "nm", "nm"), "low")
+    high = LoadedDataset(2, np.ones((32, 2, 2)),
+                         (_axis(32, 1.0, 900.0), np.arange(2), np.arange(2)),
+                         ("eV", "nm", "nm"), "high")
+    monkeypatch.setattr(pipeline, "inspect_dm4", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "infer_dataset_indices", lambda *a, **k: (None, 1, 2))
+    monkeypatch.setattr(pipeline, "read_dataset",
+                        lambda path, index: low if index == 1 else high)
+
+    with pytest.raises(ValueError, match="色散不一致"):
+        pipeline.run_analysis(config)
+
+
+# ---------------------------------------------------------------------------
 # CSV 注入清洗与输出目录守卫
 # ---------------------------------------------------------------------------
 

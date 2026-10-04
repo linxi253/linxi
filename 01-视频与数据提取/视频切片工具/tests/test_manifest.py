@@ -23,7 +23,7 @@ def test_manifest_uses_supplied_hash_and_flags_estimated_time(tmp_path: Path) ->
         target, _info(tmp_path, variable=True), ExtractOptions(),
         tmp_path / "out.ome.tif", 3, "deadbeef" * 8, time_is_estimated=True,
     )
-    with target.open(newline="", encoding="utf-8") as handle:
+    with target.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 3
     assert rows[0]["input_sha256"] == "deadbeef" * 8
@@ -44,7 +44,7 @@ def test_manifest_records_measured_timeline_columns(tmp_path: Path) -> None:
         timeline_source="measured",
         stream_start_time_s=1.0,
     )
-    with target.open(newline="", encoding="utf-8") as handle:
+    with target.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
     assert [r["timeline_source"] for r in rows] == ["measured"] * 3
     assert rows[0]["source_pts_s"] == "1.0"
