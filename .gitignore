@@ -107,6 +107,12 @@ reports/*.png
 .codex_tmp/
 *.code-workspace
 
+# ── 环境工具的临时产物（S1c）────────────────────────────────────────────
+# provision/verify 解析出的 constraints、pip 日志等中间文件；属任务产物，
+# 不是待提交内容。原始日志按批次归档在工作区外的 E 任务目录。
+.tools/.scratch/
+.tools/*.log
+
 # ── 操作系统 ──
 Thumbs.db
 Desktop.ini

@@ -60,11 +60,12 @@ jobs:
           '(^|[/\\])(\.venv[^/\\]*|venv|env|build(-[^/\\]*)?|dist(-[^/\\]*)?|release|wheelhouse|legacy|outputs?|results|runs|[^/\\]*\.egg-info|__pycache__)([/\\]|$)'
           .
 
-      # 审计工单 127：CI 矩阵与 .tools 脚本的项目清单收敛为单一来源——纯文本
-      # 比对 ci.yml 的 test 矩阵与 .tools/verify-envs.py 的 JOBS（要求集合相等）
-      # 及 .tools/provision-envs.py 的 JOBS（要求矩阵为其子集）。不做任何
-      # venv/子进程操作，秒级完成；任一侧清单漂移时此处变红。
-      - name: Guard ci.yml matrix <-> .tools project lists
+      # 工单127/S1a(R7)：CI 矩阵与 .tools 契约收敛为单一来源。除 CI 无法在运行时
+      # 推导的字段（显示名、目录、解释器版本、是否需要 FFmpeg）外，安装源、
+      # editable、额外测试依赖与测试命令都由 .tools/ci-project.py 从
+      # .tools/projects.json 解析；因此这里重复声明这些字段反而是错误，
+      # 守卫会直接报 MISMATCH（如 tests 改了而 ci.test 没改）。
+      - name: Guard ci.yml matrix <-> .tools project contract
         run: python .tools/verify-envs.py --check-matrix .github/workflows/ci.yml
 
   # ---------------------------------------------------------------------------
@@ -78,58 +79,67 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # S1a(R7)：这里只保留 CI 无法在运行时推导的字段——显示名、目录、
+        # 解释器版本、(视频工具的) FFmpeg 需求。安装源、editable、额外测试
+        # 依赖与测试命令一律由 .tools/projects.json 决定，并由
+        # .tools/ci-project.py 执行；因此**不得**在本矩阵里重复声明它们，
+        # 否则 .tools/verify-envs.py --check-matrix 会直接报 MISMATCH
+        # （这正是「tests 改了而 ci.test 没改」这类漂移的守门方式）。
         include:
-          # 审计条目 46：该项目 requires-python = ">=3.11,<3.14"，其 .venv/锁在
-          # Python 3.12.14 上验证（见 环境隔离说明.md 第 3 节），故显式 py: '3.12'；
-          # 其余项目的锁文件头部均标注按 Python 3.10（多数为 3.10.9）生成，走下方默认 '3.10'。
+          # requires-python = ">=3.11,<3.14"，其 .venv/锁在 Python 3.12.14 上验证
+          # （见 环境隔离说明.md），故 py: '3.12'；其余项目的锁头部均标注按
+          # Python 3.10（多数 3.10.9）生成，stem-optimize 的锁名与头部为
+          # Windows/CPython 3.10 且带 --require-hashes，原子中心 pyproject 为
+          # >=3.10,<3.11，都必须在 3.10 下运行。
           - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true, py: '3.12' }
-          - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7' }
-          - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具' }
-          # 该项目的锁文件是 Windows + CPython 3.10 + --require-hashes，必须用 3.10
+          # 10-DSH集成 复用视频切片工具与 drift-correction-v7 的源码（sys.path 注入），
+          # 完整链要用 FFmpeg 造合成视频，因此同样需要 py 3.12 与 ffmpeg: true。
+          - { name: '10 TEM 视频流水线',    dir: '10-DSH集成', ffmpeg: true, py: '3.12' }
+          - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7', py: '3.10' }
+          - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具', py: '3.10' }
           - { name: '02 STEM 图像优化',    dir: '02-图像处理/stem-optimize-STEM图像优化', py: '3.10' }
-          - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具' }
-          - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具' }
-          - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析' }
-          # 测试导入 yaml——requirements.txt / pyproject / lock 均已声明 pyyaml
-          # （审计工单 41），无需再用 deps 补装。
-          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA' }
-          - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法' }
-          # 审计条目 13：仓库里唯一配了完整 pytest 工程却被矩阵遗漏的子项目。
-          # pyproject 锁 requires-python >=3.10,<3.11 → 必须用 3.10；src/ 布局
-          # 且无 conftest.py，测试前须 editable 安装才能 import atom_center；
-          # 无根级 requirements*.txt，依赖随 editable 安装带入；tests 大多不需
-          # torch（backends.py 延迟导入，test_onnx_parity 用 importorskip 降级）。
-          # deps 补 opencv（tests 实测需要但 core dependencies 未声明，见 Known gaps）。
-          # packaged_smoke 一例已改为按字体资产存在性条件跳过，不再需要 deselect。
-          - { name: '03 原子中心识别模型开发', dir: '03-应变分析/原子中心识别模型开发', py: '3.10', editable: true,
-              deps: 'opencv-python==4.11.0.86' }
-          - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
-          - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
-          - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
-          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计' }
-          - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor' }
-          - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具' }
-          - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟' }
-          # tests/ 下是脚本式自检（README 记录 `python tests/verify_physics.py`），
-          # 函数靠返回值串联，pytest 无法收集（会报 fixture 'pl' not found）
-          - { name: '010 STEM 模拟',      dir: '010-STEM模拟', test: 'python tests/verify_physics.py' }
-          - { name: '全整合 TEM Suite',    dir: '全整合', test: 'python tests/smoke_test.py' }
+          - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具', py: '3.10' }
+          - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具', py: '3.10' }
+          - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析', py: '3.10' }
+          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', py: '3.10' }
+          - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法', py: '3.10' }
+          - { name: '03 原子中心识别模型开发', dir: '03-应变分析/原子中心识别模型开发', py: '3.10' }
+          - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计', py: '3.10' }
+          - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析', py: '3.10' }
+          - { name: '04 统计面积',         dir: '04-统计分析/统计面积', py: '3.10' }
+          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计', py: '3.10' }
+          - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor', py: '3.10' }
+          - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具', py: '3.10' }
+          - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟', py: '3.10' }
+          - { name: '010 STEM 模拟',      dir: '010-STEM模拟', py: '3.10' }
+          - { name: '全整合 TEM Suite',    dir: '全整合', py: '3.10' }
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (审计 95)
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          # 审计条目 46：默认统一到 3.10。矩阵内除「视频切片工具」（requires-python
-          # >=3.11，上方显式 py: '3.12'）外，其余锁文件头部均标注按 Python 3.10
-          # 生成（多数为 3.10.9；stem-optimize 与原子中心另显式 py: '3.10'）；
-          # 3.12 下这些钉死版本的轮子可用性未经锁层面保证。
+          # 审计条目 46 / S1a(R4)：默认统一到 3.10，矩阵内仅视频切片工具需要 3.12
+          # （requires-python >=3.11,<3.14，上方显式 py: '3.12'）。各项目锁文件头部
+          # 标注按 Python 3.10（多数 3.10.9）生成；stem-optimize 的锁名与头部为
+          # Windows/CPython 3.10 且带 --require-hashes，原子中心 pyproject 为
+          # >=3.10,<3.11，均不可用 3.12。
           python-version: ${{ matrix.py || '3.10' }}
           cache: pip
 
       - name: Provide FFmpeg 8.x (required by 视频切片工具, >= 8.0.3)
         if: matrix.ffmpeg
         shell: pwsh
+        env:
+          # 消费方目录：video_extractor.FFmpegManager 以其 __file__ 的上一级
+          # （即 01-视频与数据提取/视频切片工具）为根，查找 tools/ffmpeg/ffmpeg.exe。
+          # 10-DSH集成 的 pipeline 通过 sys.path 复用同一模块，因此两个 ffmpeg
+          # job（视频工具、pipeline）必须下载到**同一个**目录；把资产放进
+          # matrix.dir/tools/ffmpeg 会让 pipeline job 放错位置（它自己不会被
+          # FFmpegManager 看到），而 PATH 也没有加入该目录。
+          # 单一来源：这里只写一次，合同测试
+          # (.tools/tests/test_ci_contract.py) 校验它等于消费方模块所在目录。
+          FFMPEG_CONSUMER_DIR: 01-视频与数据提取/视频切片工具
         run: |
           $ErrorActionPreference = 'Stop'
           # 审计条目 63：CI 不得静默使用与 tools/ffmpeg/PROVENANCE.md 不一致的构建。
@@ -154,102 +164,65 @@ jobs:
           $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
           Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
           $inner = Get-ChildItem $extract -Directory | Select-Object -First 1
-          $dest = Join-Path '${{ matrix.dir }}' 'tools/ffmpeg'
+          $dest = Join-Path '${{ github.workspace }}' (Join-Path $env:FFMPEG_CONSUMER_DIR 'tools/ffmpeg')
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item (Join-Path $inner.FullName 'bin/ffmpeg.exe') $dest -Force
           Copy-Item (Join-Path $inner.FullName 'bin/ffprobe.exe') $dest -Force
           Copy-Item (Join-Path $inner.FullName 'bin/*.dll') $dest -Force
+          # 两个 job 用同一目录：断言消费方模块确实会在此处解析到这对二进制。
+          python "${{ github.workspace }}/.tools/verify_ffmpeg_asset.py" --expect-dir $dest
           & (Join-Path $dest 'ffmpeg.exe') -version | Select-Object -First 1
 
-      - name: Install dependencies
-        working-directory: ${{ matrix.dir }}
+      # S1a(R6/R7)：安装不再由 ci.yml 自己"按文件名猜锁"、也不再用裸
+      # `pip install pytest` 覆盖锁内版本。整个"建 venv + 按锁安装 + editable +
+      # 测试 overlay + 校验"由 .tools/ci-project.py 转交 .tools/provision-envs.py
+      # ——与本机供给完全同一条实现，CI 不再有第二套安装器。矩阵里没有
+      # venv/editable/deps/test 字段：它们都从 .tools/projects.json 派生，
+      # 由上面的 guard 步骤守门。
+      - name: Install dependencies (manifest-driven)
         shell: pwsh
+        # 每步失败立即停止，避免前一步的错误被后续命令掩盖。
+        # 注意：这里**不**对 job 解释器做任何 pip 安装（包括 pip 自升级）——
+        # setup-python 的解释器只当母本，项目依赖一律进各自的项目 .venv。
         run: |
-          python -m pip install --upgrade pip
-          # 各工具的锁定文件名不统一，按优先级自动探测。
-          # requirements-win-py310.lock 是 Windows 原生锁（含哈希），优先使用。
-          $lock = @(
-            'requirements-win-py310.lock', 'requirements.lock.txt', 'requirements.lock',
-            'requirements-lock.txt', 'requirements.txt'
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          Write-Host "using requirements: $lock"
-          if ($lock) { python -m pip install -r $lock }
-          # 工单38：原先的裸 `pip install pytest` 会把锁文件钉住的 pytest
-          # 无条件覆盖成最新版（05 4D-STEM 曾锁 pytest==9.1.1，CI 实际又装上
-          # 更新的 9.x，与 requirements.txt 的声明区间脱节）。改为仅当按锁
-          # 安装后 pytest 仍缺席时才安装；matrix.deps 仍照常补装。
-          $PSNativeCommandUseErrorActionPreference = $false
-          $deps = '${{ matrix.deps }}'.Trim()
-          python -c "import pytest" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "pytest already provided by $lock; skip bare install"
-            if ($deps) { python -m pip install $deps }
-          } else {
-            if ($deps) { python -m pip install pytest $deps }
-            else { python -m pip install pytest }
-          }
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" install `
+            --dir "${{ matrix.dir }}" `
+            --log "${{ runner.temp }}/ci-install-${{ strategy.job-index }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "project install failed ($LASTEXITCODE)" }
 
-      # src/ 布局的项目（原子中心识别模型开发）无 conftest.py 兜底 import，
-      # pytest 收集前必须先可编辑安装出 atom_center 包（审计条目 13）
-      - name: Install project (editable)
-        if: matrix.editable
-        working-directory: ${{ matrix.dir }}
-        run: python -m pip install -e .
-
-      # 工单38守门（修法第 3 步）：实际安装的 pytest 必须落在该子项目
-      # requirements.txt 声明的版本区间内，防止锁与声明再次漂移
-      # （05 4D-STEM 曾声明 pytest<9，锁却装 9.1.1，又被裸装覆盖）。
-      # 未声明 pytest 或 pytest 未安装的子项目自动跳过；遇到本断言
-      # 不支持的版本运算符立即报错，不做静默放行。
+      # 工单38守门（S1a 起由脚本承担）：实际安装的 pytest 必须落在该子项目
+      # requirements.txt 声明的版本区间内，防止锁与声明再次漂移。判断逻辑与
+      # overlay 安装共用 .tools/_envcommon.py，不在 YAML 里重写一遍。
       - name: Assert pytest matches declared range
-        working-directory: ${{ matrix.dir }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # 原生命令 stderr 重写为错误记录的行为仅存在于 Windows PowerShell 5.1，
-          # pwsh 7 默认关闭；此处显式关闭以兼容任何宿主配置。
-          $PSNativeCommandUseErrorActionPreference = $false
-          if (-not (Test-Path requirements.txt)) { Write-Host '无 requirements.txt，跳过断言'; exit 0 }
-          $req = Select-String -Path requirements.txt -Pattern '^\s*pytest\s*([=<>!~].*?)\s*$' | Select-Object -First 1
-          if (-not $req) { Write-Host 'requirements.txt 未声明 pytest，跳过断言'; exit 0 }
-          $spec = (($req.Matches[0].Groups[1].Value) -split ';')[0].Trim()
-          $probe = python -m pytest --version 2>$null
-          if ($LASTEXITCODE -ne 0 -or -not $probe) { Write-Host 'pytest 未安装，跳过断言'; exit 0 }
-          $ver = (($probe | Select-Object -First 1) -replace '^pytest\s+', '').Trim()
-          foreach ($c in ($spec -split ',')) {
-            if (-not $c.Trim()) { continue }
-            if ($c -notmatch '^\s*(>=|<=|==|!=|>|<)\s*([0-9.]+)\s*$') {
-              throw "requirements.txt 的 pytest 约束 '$($c.Trim())' 含本断言不支持的运算符，请人工核对"
-            }
-            $op = $Matches[1]
-            # [version] 至少要求 major.minor 两段，单段上界（如 <10）须补 .0
-            $boundText = $Matches[2]
-            if ($boundText -notmatch '\.') { $boundText = "$boundText.0" }
-            $bound = [version]$boundText
-            $cur = [version]$ver
-            $ok = switch ($op) {
-              '>=' { $cur -ge $bound }
-              '>'  { $cur -gt $bound }
-              '<=' { $cur -le $bound }
-              '<'  { $cur -lt $bound }
-              '==' { $cur -eq $bound }
-              '!=' { $cur -ne $bound }
-            }
-            if (-not $ok) { throw "pytest $ver 不满足 requirements.txt 声明的区间 $spec" }
-          }
-          Write-Host "pytest $ver 满足 requirements.txt 声明的区间 $spec"
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" check-pytest `
+            --dir "${{ matrix.dir }}"
+          if ($LASTEXITCODE -ne 0) { throw "pytest declaration check failed ($LASTEXITCODE)" }
 
       - name: Run tests
-        working-directory: ${{ matrix.dir }}
         env:
           # GitHub Windows runner 的 TEMP 默认是 8.3 短名（C:\Users\RUNNER~1\AppData\Local\Temp），
           # 会让「保存的路径 vs 真实路径」这类比较出现长短名不一致而假失败。
           # runner.temp 是 D:\a\_temp，各段都短于 8 字符，不会产生短名别名。
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        # -rs 让 skip 原因出现在 CI 输出里（工单 94：GUI 测试按环境条件跳过时
-        # 必须能看出跳过了什么，而不是只看到计数）
-        run: ${{ matrix.test || 'python -m pytest -q -rs' }}
+        shell: pwsh
+        # 测试命令来自 .tools/projects.json 的 tests 字段：09-HRTEM模拟 跑
+        # pytest + verify_physics，010-STEM模拟 跑 verify_physics，全整合 跑
+        # smoke_test，其余跑 pytest。ci-project.py 依次执行全部命令、逐条判定
+        # 退出码，并完整保存 stdout/stderr（不只失败 tail）。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" test `
+            --dir "${{ matrix.dir }}" `
+            --log "${{ runner.temp }}/ci-test-${{ strategy.job-index }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
 
   # ---------------------------------------------------------------------------
   # 引擎同步守门（审计条目 15 轻量路线）：09-HRTEM模拟/tem_sim 与
