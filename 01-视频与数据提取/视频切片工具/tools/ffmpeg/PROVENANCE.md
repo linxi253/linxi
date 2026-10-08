@@ -3,19 +3,25 @@
 - 版本：`n8.1.3-14-g330caae0c1-20261001`
 - 下载并复核日期：2026-10-02
 - 发布方：BtbN / FFmpeg-Builds
-- 发布标签：`latest`（自动构建别名；此前钉住的 `autobuild-2026-08-21-13-40`
-  已被上游删除，2026-10-02 实测下载链接与 GitHub API 均返回 404，故重钉到
-  当时 latest 指向的构建）
+- 发布标签：`autobuild-2026-10-01-13-06`（**固定标签**）
+  - 历史：初次钉住的 `autobuild-2026-08-21-13-40` 已被上游删除（2026-10-02 实测下载
+    链接与 GitHub API 均返回 404）；2026-10-02 曾临时重钉到 `latest` 别名。
+  - **2026-10-08 复核**：`latest` 别名已漂移（GitHub API 报出的归档 digest 与当时钉住
+    的 `a8fbc540…` 不同），故改为钉住固定标签 `autobuild-2026-10-01-13-06` 下的同一构建。
+    该固定标签发布于 2026-10-01T13:07:07Z，其归档 digest 与本文件当前钉住值一致。
 - 构建变体：`win64-lgpl-shared-8.1`
-- 发布页：https://github.com/BtbN/FFmpeg-Builds/releases/tag/latest
-- 归档：`ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`
-- 归档 SHA-256：`a8fbc540821511f2720763bb59aad8738cd2fc8b0e4677ea1795d4b6b6cc9b77`
+- 发布页：https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-01-13-06
+- 归档：`ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip`
+- 归档 SHA-256：`bf545d8fee9bb6957c1f3dea0f384bf64edead407d763326dbbd2de1b04768a4`
+  - 2026-10-08 用固定标签归档复核：**归档整体 SHA-256 与 2026-10-02 记录的`a8fbc540…` 不同**（打包/归档层面有差异），但**解包后 9 个运行时文件（`ffmpeg.exe`、`ffprobe.exe` 与 7 个 DLL）的 SHA-256 与已验收构建**逐一相同**，见 `.review-tmp` 证据 `ffmpeg-tag-binary-check.json` 与 `ffmpeg-runtime-accepted.json`。
+  - 归档中还含 `ffplay.exe`，本项目**明确不分发**该文件，故逐文件比对时它标记为不匹配属预期，不是 9 个运行时文件的差异。
 - 上游 FFmpeg commit：`330caae0c1`
 
-> 注意：`latest` 别名会随上游发布新构建而漂移。`.github/workflows/ci.yml`
-> 的 FFmpeg 步骤对下载归档做强 SHA-256 校验，与本文件钉住的哈希不一致时
-> 显式失败并提示重钉——届时请复核新构建、更新本文件（含逐文件哈希表与
-> 本地 `tools/ffmpeg/` 二进制），保持三方一致。
+> 注意：本文件钉住的是**固定发布标签** `autobuild-2026-10-01-13-06`，不再依赖
+> `latest` 别名。固定标签同样可能被上游删除：`.github/workflows/ci.yml`
+> 的 FFmpeg 步骤对下载归档做强 SHA-256 校验，标签缺失或归档变化时显式失败，
+> 提示先核实该标签/构建是否仍可获取——届时请复核来源、更新本文件
+> （含逐文件哈希表与本地 `tools/ffmpeg/` 二进制），保持三方一致。
 
 归档解压后仅保留 `ffmpeg.exe`、`ffprobe.exe` 及二者实际依赖的七个共享库；
 不包含播放器 `ffplay.exe`。

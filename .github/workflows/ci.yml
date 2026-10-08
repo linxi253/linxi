@@ -144,22 +144,27 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # 审计条目 63：CI 不得静默使用与 tools/ffmpeg/PROVENANCE.md 不一致的构建。
           # 旧钉住的发布标签 autobuild-2026-08-21-13-40 已被上游删除（2026-10-02 实测
-          # 下载链接与 GitHub API 均返回 404），2026-10-02 已重钉到当时 latest 的构建
-          # n8.1.3-14-g330caae0c1-20261001，并同步 PROVENANCE.md 与本地 tools/ffmpeg。
-          # latest 别名未来仍会漂移：本步骤对归档做 SHA-256 强校验，上游一发布新构建
-          # 本步骤就会显式失败，提示复核新构建并重钉 PROVENANCE.md（连同本地二进制
-          # 与 build.ps1 的逐文件哈希），杜绝「用漂移来的二进制跑测试却报绿」的供应链缺口。
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip'
+          # 下载链接与 GitHub API 均返回 404）。
+          # 2026-10-02 曾临时重钉到 latest 别名；2026-10-08 复核发现 latest 已漂移
+          # （GitHub API 报出的归档 digest 与钉住值不同），因此改为钉住**固定发布标签**
+          # autobuild-2026-10-01-13-06 下的同一构建 n8.1.3-14-g330caae0c1-20261001。
+          # 固定标签同样可能被上游删除：本步骤对归档做 SHA-256 强校验，标签缺失或归档
+          # 变化都会显式失败，提示先核实该标签/构建是否仍可获取，再复核来源并重钉
+          # PROVENANCE.md（连同本地二进制与 build.ps1 的逐文件哈希），
+          # 杜绝「用漂移来的二进制跑测试却报绿」的供应链缺口。
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip'
           # tools/ffmpeg/PROVENANCE.md 钉住的归档 SHA-256（与分发侧 build.ps1 同源）
-          $expected = 'a8fbc540821511f2720763bb59aad8738cd2fc8b0e4677ea1795d4b6b6cc9b77'
+          $expected = 'bf545d8fee9bb6957c1f3dea0f384bf64edead407d763326dbbd2de1b04768a4'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           Invoke-WebRequest -Uri $url -OutFile $zip
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($hash -ne $expected) {
             throw ("下载的 FFmpeg 归档 SHA-256 为 $hash，与 tools/ffmpeg/PROVENANCE.md 钉住的构建" +
-                   "（$expected，n8.1.3-14-g330caae0c1-20261001）不一致——上游 latest 已漂移，" +
-                   "拒绝使用未校验的二进制。请复核新构建并同步更新 PROVENANCE.md（与本地 tools/ffmpeg、" +
-                   "build.ps1 的逐文件哈希一起），让 CI 与分发重新对齐后重跑。")
+                   "（$expected，n8.1.3-14-g330caae0c1-20261001）不一致——" +
+                   "请先核实固定发布标签 autobuild-2026-10-01-13-06 及其归档是否仍可获取" +
+                   "（标签可能已被上游删除，下载到 404/错误页也会走到这里），" +
+                   "再复核构建来源并同步更新 PROVENANCE.md（与本地 tools/ffmpeg、build.ps1 的" +
+                   "逐文件哈希一起），让 CI 与分发重新对齐后重跑。拒绝使用未校验的二进制。")
           }
           $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
           Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force

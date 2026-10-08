@@ -79,7 +79,7 @@ v4.1 改为两个小程序共用七个 FFmpeg DLL，并移除了只为 PNG/JPEG 
 ```powershell
 # 下载归档；SHA-256 必须与 tools/ffmpeg/PROVENANCE.md 记录一致，不一致即停止使用
 Invoke-WebRequest `
-  -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip" `
+  -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip" `
   -OutFile "ffmpeg-runtime.zip"
 # 解压后把 ffmpeg.exe、ffprobe.exe 与七个 DLL 放入 tools/ffmpeg/，并逐文件核对 SHA-256
 ```
