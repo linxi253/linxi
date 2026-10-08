@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "引用本工具集时，请记录你实际使用的具体子工具、版本或 commit，以及相关上游方法的出处。If you use this toolkit, please cite it and record the specific sub-tool, version or commit you used, together with the relevant upstream method references."
+title: "linxi / AIforTEM 电镜数据处理工具集"
+abstract: "A collection of TEM / HRTEM / STEM / 4D-STEM image-processing, EELS spectroscopy and quantitative-analysis tools, kept as one repository with one directory per tool. 每个工具各有独立的 README、依赖与许可证说明。"
+type: software
+authors:
+  - family-names: "宋"
+    given-names: "现昆"
+    affiliation: "中国科学院大学"
+repository-code: "https://github.com/linxi253/linxi"
+url: "https://github.com/linxi253/linxi"
+keywords:
+  - electron microscopy
+  - TEM
+  - HRTEM
+  - STEM
+  - 4D-STEM
+  - EELS
+  - image processing
+  - strain analysis

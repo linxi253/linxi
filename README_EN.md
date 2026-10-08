@@ -115,6 +115,15 @@ and distributing them independently is unaffected.
 Per-tool licenses, third-party dependencies, and third-party material **deliberately not included**
 are listed in [NOTICE.md](NOTICE.md).
 
+## Citation and contributing
+
+- **Citation**: see [CITATION.cff](CITATION.cff). When citing this toolkit, please also
+  record the specific sub-tool, version or commit you used, and the relevant upstream
+  method references.
+- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) (pick one sub-project and read
+  its README first; each project keeps its own environment and lock files; raw
+  experimental data is read-only and confidential/large data must not be committed).
+
 ## README Coverage
 
 READMEs are written per "standalone project or material collection" and list the key files inside.
