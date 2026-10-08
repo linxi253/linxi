@@ -974,7 +974,9 @@ class AtomMarkerApp:
 
         self.setup_ui()
         self._bind_shortcuts()
-        self.root.bind('<Destroy>', self._on_destroy, add='+')
+        # Lifecycle events belong to this widget, not the Suite's active-tab
+        # shortcut dispatcher (which is removed before the host is destroyed).
+        tk.Misc.bind(self.root, '<Destroy>', self._on_destroy, add='+')
         # Drain Tk's theme/layout idle work while this window is still alive.
         self.root.update_idletasks()
 

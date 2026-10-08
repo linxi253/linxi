@@ -3,12 +3,12 @@
   "source_version": "3.4.1",
   "local_tests": {
     "command": ".venv/Scripts/python.exe -m unittest discover -s tests -v",
-    "passed": 116,
+    "passed": 117,
     "failed": 0,
     "skipped": 0,
-    "audit_regressions": 24,
+    "audit_regressions": 25,
     "tcl_destroy_errors": 0,
-    "log_sha256": "8f91f096fa9204cef9c02f3468c76203bfc765b134af3c723d5c4f2a5bd8211d"
+    "log_sha256": "de7eae2cc389ab0f026333d92a9940da6cf2a3eafaf010a36af3f8297de123c9"
   },
   "suite_smoke": {
     "command": ".venv/Scripts/python.exe tests/smoke_test.py ppa_strain",
@@ -18,12 +18,13 @@
     ],
     "passed": 1,
     "failed": 0,
-    "theme": "cosmo -> cosmo"
+    "theme": "cosmo -> cosmo",
+    "actual_toolhost_close": "PASS: native destroy binding cancels poll/draw callbacks and invalidates generation"
   },
   "pip_check": "No broken requirements found",
   "ast_checked_files": 14,
   "source_sha256": {
-    "ppa.py": "59fcdccac2d2cea74e147d0c83039976096d0c314a8beb2201a39946e7c9d8e8",
+    "ppa.py": "510e90f8ddbae60c2c801953c459872fc05ea5fba835245d2036246a303e11d2",
     "ppa_stats.py": "2d4f77c148eaae455b71e325de132aeb22312af7853ad670ba9b469b1cfe2e20",
     "ppa_core/strain.py": "11986d2a2a962450a51e2684be6fdae6518953e923a99e53117358689706b102",
     "ppa_core/lattice.py": "7db35ccec5b14c80175c5d43d58b4e1816763bb23cc0fbd27e6f609a39c39df4",
@@ -32,7 +33,7 @@
     "ppa_core/validation.py": "0a2d7fcc4f54c6b5a507071763dc5fba70d4a89cfd360a566cbd9e5721b02988",
     "ppa_core/export_store.py": "cc6d392c833965f99db69ae7e0897da5396ff873a8b35900f921dbc36373be49",
     "ppa_core/interpolation.py": "836c83bb677f9198bd80d1479cd0171ef5e7cc4314c373673c84014bd13cb192",
-    "tests/test_review_fixes.py": "fe1dc82e0680a1b44616136171fbac5c8bde5499c2f988206d0a6a44ee4cea9d",
+    "tests/test_review_fixes.py": "ddbd988b66ea143018af5be4d8a3c4eca4a08d2962eac91e9a12fac6e0eeddba",
     "pyproject.toml": "3a473606aa8464afe8c738f44c38b5dc0950d01686e279411838fbb3c2f8d11e",
     "ppa-v2.spec": "e0f09b394b5dee945a74ffebda97946f011ec2abb39f5150896b6c1997e83528",
     "ppa_version_info.txt": "8c3d048c402ce425658d0a30eb60c1cf138ef5a532d636101ebf283a2a9b1060",
@@ -54,13 +55,14 @@
   "release_tests": {
     "cwd": "H:/AIforTEM/linxi-public-alter/AIforTEM/AIforTEM/03-应变分析/原子级应力分析-PPA",
     "interpreter": ".venv/Scripts/python.exe",
-    "passed": 116,
+    "passed": 117,
     "failed": 0,
     "skipped": 0,
-    "log_sha256": "89e320114a2796e0fc17677911cc8868878e8029fa6010dd22e65a6d551f68c3",
+    "log_sha256": "4ba4c824f023dd0cd301a8a73200d43561c71beea65932585bf1c5533921662d",
     "ppa_and_core_imported_from_release": true,
     "suite_smoke_passed": 1,
     "suite_theme_restored": true,
-    "github_repository": "https://github.com/linxi253/linxi"
+    "github_repository": "https://github.com/linxi253/linxi",
+    "actual_toolhost_close": "PASS"
   }
 }

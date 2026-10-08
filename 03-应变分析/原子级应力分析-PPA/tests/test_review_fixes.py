@@ -261,14 +261,23 @@ class GuiCounterexamples(unittest.TestCase):
             self.assertTrue(thread.called)
             thread.call_args.kwargs['target']()
         if commit:
-            self.app._poll_worker_queue()
+            self.poll_now()
+
+    def poll_now(self):
+        # Replace the scheduled callback when driving polling synchronously.
+        # Calling an after callback manually without cancelling its timer would
+        # create a second poll loop that cannot be represented by one timer ID.
+        if self.app._poll_after_id is not None:
+            self.root.after_cancel(self.app._poll_after_id)
+            self.app._poll_after_id = None
+        self.app._poll_worker_queue()
 
     def test_reset_discards_queued_old_analysis(self):
         self.configure(); self.analyze(commit=False)
         generation = self.app._job_generation
         with mock.patch.object(ppa.messagebox, 'askyesno', return_value=True):
             self.app.reset_all()
-        self.app._poll_worker_queue()
+        self.poll_now()
         self.assertGreater(self.app._job_generation, generation)
         self.assertIsNone(self.app.strain_xx)
         self.assertEqual(self.app.points, [])
@@ -361,6 +370,21 @@ class GuiCounterexamples(unittest.TestCase):
         self.assertFalse(any(timer in pending for timer in timers))
         self.assertTrue(app._closed)
         self.assertGreater(app._job_generation, generation)
+        self.root.update()
+
+    def test_host_bind_override_cannot_swallow_destroy_cleanup(self):
+        # Embedded hosts may forward bind() to a shared, active-tab dispatcher.
+        # Destroy belongs to the actual widget even when that dispatcher vanishes.
+        class ForwardingHost(ppa.tk.Toplevel):
+            def bind(self, sequence=None, func=None, add=None):
+                return 'forwarded-to-host-shortcuts'
+        host = ForwardingHost(self.root); host.withdraw()
+        app = ppa.AtomMarkerApp(host)
+        app._ensure_worker_polling(); app.canvas.draw_idle()
+        timers = [app._poll_after_id, app.canvas._idle_draw_id]
+        host.destroy()
+        self.assertTrue(app._closed)
+        self.assertFalse(any(timer in self.root.tk.call('after', 'info') for timer in timers))
         self.root.update()
 
     def test_export_failure_never_reports_success(self):
