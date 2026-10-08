@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-08",
+  "source_version": "3.4.1",
+  "local_tests": {
+    "command": ".venv/Scripts/python.exe -m unittest discover -s tests -v",
+    "passed": 116,
+    "failed": 0,
+    "skipped": 0,
+    "audit_regressions": 24,
+    "tcl_destroy_errors": 0,
+    "log_sha256": "8f91f096fa9204cef9c02f3468c76203bfc765b134af3c723d5c4f2a5bd8211d"
+  },
+  "suite_smoke": {
+    "command": ".venv/Scripts/python.exe tests/smoke_test.py ppa_strain",
+    "cwd": "H:/AIforTEM/全整合",
+    "executed_tools": [
+      "ppa_strain"
+    ],
+    "passed": 1,
+    "failed": 0,
+    "theme": "cosmo -> cosmo"
+  },
+  "pip_check": "No broken requirements found",
+  "ast_checked_files": 14,
+  "source_sha256": {
+    "ppa.py": "59fcdccac2d2cea74e147d0c83039976096d0c314a8beb2201a39946e7c9d8e8",
+    "ppa_stats.py": "2d4f77c148eaae455b71e325de132aeb22312af7853ad670ba9b469b1cfe2e20",
+    "ppa_core/strain.py": "11986d2a2a962450a51e2684be6fdae6518953e923a99e53117358689706b102",
+    "ppa_core/lattice.py": "7db35ccec5b14c80175c5d43d58b4e1816763bb23cc0fbd27e6f609a39c39df4",
+    "ppa_core/image_io.py": "bafffe3318a8632e1133230d73499368837509484fccea59e55ceff978595a5b",
+    "ppa_core/project_store.py": "38cac5a4acb484b7e1df7deb9f1332face3ab32d13b53f6c89f4aa3ed281c32a",
+    "ppa_core/validation.py": "0a2d7fcc4f54c6b5a507071763dc5fba70d4a89cfd360a566cbd9e5721b02988",
+    "ppa_core/export_store.py": "cc6d392c833965f99db69ae7e0897da5396ff873a8b35900f921dbc36373be49",
+    "ppa_core/interpolation.py": "836c83bb677f9198bd80d1479cd0171ef5e7cc4314c373673c84014bd13cb192",
+    "tests/test_review_fixes.py": "fe1dc82e0680a1b44616136171fbac5c8bde5499c2f988206d0a6a44ee4cea9d",
+    "pyproject.toml": "3a473606aa8464afe8c738f44c38b5dc0950d01686e279411838fbb3c2f8d11e",
+    "ppa-v2.spec": "e0f09b394b5dee945a74ffebda97946f011ec2abb39f5150896b6c1997e83528",
+    "ppa_version_info.txt": "8c3d048c402ce425658d0a30eb60c1cf138ef5a532d636101ebf283a2a9b1060",
+    "requirements.lock.txt": "4d0c9cf9e3e2714b2b105ef784579a8dd77904c474a6741a4c6f7000e7018c3f",
+    "atom_detector/dataset/prepare_dataset.py": "c8cf0885d932e7e0824527ce51a61ff1ec9616357331e39826475185b681c4cb",
+    "atom_detector/integration/ppa_plugin.py": "c62ab30affc76070250ef6c4a077d2bc61c6d090ee31970fae9186a9a3befe41"
+  },
+  "assignment_timings_single_conflict_seconds": {
+    "2500": 0.0625,
+    "10000": 0.2724
+  },
+  "not_run": [
+    "real experiment calibration",
+    "optional ML inference and training",
+    "CVE database audit",
+    "EXE rebuild and signing"
+  ],
+  "note": "Source tests use the project venv. Original review evidence is preserved separately. Timings are bounded synthetic local examples, not scalability guarantees.",
+  "release_tests": {
+    "cwd": "H:/AIforTEM/linxi-public-alter/AIforTEM/AIforTEM/03-应变分析/原子级应力分析-PPA",
+    "interpreter": ".venv/Scripts/python.exe",
+    "passed": 116,
+    "failed": 0,
+    "skipped": 0,
+    "log_sha256": "89e320114a2796e0fc17677911cc8868878e8029fa6010dd22e65a6d551f68c3",
+    "ppa_and_core_imported_from_release": true,
+    "suite_smoke_passed": 1,
+    "suite_theme_restored": true,
+    "github_repository": "https://github.com/linxi253/linxi"
+  }
+}

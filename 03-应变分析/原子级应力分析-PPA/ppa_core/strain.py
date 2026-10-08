@@ -128,7 +128,7 @@ def _polar_angle(F: np.ndarray) -> np.ndarray:
     """Return the signed 2-D polar-decomposition rotation for each F."""
     angles = np.full(len(F), np.nan, dtype=np.float64)
     for i, matrix in enumerate(F):
-        if not np.isfinite(matrix).all():
+        if not np.isfinite(matrix).all() or np.linalg.det(matrix) <= 1e-12:
             continue
         u, _, vt = np.linalg.svd(matrix)
         rotation = u @ vt
@@ -151,6 +151,25 @@ def _strain_from_F(
     site_quality: np.ndarray | None = None,
     invalid_reasons: np.ndarray | None = None,
 ) -> StrainResult:
+    F = np.asarray(F, dtype=float).copy()
+    quality_mask = np.asarray(quality_mask, dtype=bool).copy()
+    finite = np.isfinite(F).all(axis=(1, 2))
+    rejected = np.zeros(len(F), dtype=bool)
+    reasons = (np.full(len(F), "", dtype=object) if invalid_reasons is None
+               else np.asarray(invalid_reasons, dtype=object).copy())
+    for i in np.flatnonzero(finite):
+        determinant = float(np.linalg.det(F[i]))
+        singular = np.linalg.svd(F[i], compute_uv=False)
+        if determinant <= 0 or singular[-1] <= 1e-10*max(1., singular[0]):
+            rejected[i] = True
+            reasons[i] = "orientation_reversed" if determinant < 0 else "collapsed_map"
+    rejected |= quality_mask & ~finite
+    reasons[quality_mask & ~finite] = "nonfinite_deformation_gradient"
+    quality_mask &= ~rejected & finite
+    F[~quality_mask] = np.nan
+    if site_quality is not None:
+        site_quality = np.asarray(site_quality, dtype=object).copy()
+        site_quality[~quality_mask] = "invalid"
     identity = np.eye(2)
     H = F - identity
     small = 0.5 * (H + np.swapaxes(H, 1, 2))
@@ -174,7 +193,7 @@ def _strain_from_F(
         method=method,
         site_indices=site_indices,
         site_quality=site_quality,
-        invalid_reasons=invalid_reasons,
+        invalid_reasons=reasons,
     )
 
 
@@ -195,7 +214,7 @@ def compute_cst_strain(
     deformed = _as_points(deformed_positions, "deformed_positions")
     if reference.shape != deformed.shape:
         raise AnalysisError("Reference and deformed positions must have the same shape.")
-    if max_edge_factor <= 0:
+    if not np.isfinite(max_edge_factor) or max_edge_factor <= 0:
         raise AnalysisError("max_edge_factor must be positive.")
     if len(np.unique(reference, axis=0)) != len(reference):
         raise AnalysisError("Reference positions contain duplicates; resolve duplicate lattice matches first.")
@@ -256,6 +275,9 @@ def compute_local_peak_pair_strain(
     *,
     equivalent_coefficient: float = 4.0 / 9.0,
     max_condition: float = LATTICE_CONDITION_GUIDANCE["general"],
+    neighbor_map: np.ndarray | None = None,
+    reference_basis: np.ndarray | None = None,
+    unresolved_mask: np.ndarray | None = None,
 ) -> StrainResult:
     """Compute local deformation gradients while retaining every accepted atom.
 
@@ -283,7 +305,10 @@ def compute_local_peak_pair_strain(
         assert np.allclose(result.small_xx[result.quality_mask], 0.05)
     """
     condition_limit = validate_max_condition(max_condition)
-    indices = np.asarray(lattice_indices, dtype=int)
+    raw_indices = np.asarray(lattice_indices, dtype=float)
+    if not np.isfinite(raw_indices).all() or np.any(np.abs(raw_indices) > 1e9) or not np.equal(raw_indices, np.rint(raw_indices)).all():
+        raise AnalysisError("Lattice indices must be finite integers.")
+    indices = raw_indices.astype(np.int64)
     reference = _as_points(reference_positions, "reference_positions")
     deformed = _as_points(deformed_positions, "deformed_positions")
     if indices.shape != reference.shape or deformed.shape != reference.shape:
@@ -303,6 +328,55 @@ def compute_local_peak_pair_strain(
     quality_mask = np.zeros(len(indices), dtype=bool)
     site_quality = np.full(len(indices), "invalid", dtype=object)
     invalid_reasons = np.full(len(indices), "insufficient_noncollinear_neighbors", dtype=object)
+
+    if neighbor_map is not None:
+        from .lattice import OFFSETS
+        raw_partners = np.asarray(neighbor_map, dtype=float)
+        if not np.isfinite(raw_partners).all() or not np.equal(raw_partners, np.rint(raw_partners)).all():
+            raise AnalysisError("Neighbor map must contain finite integer indices.")
+        partners = raw_partners.astype(int)
+        basis = np.asarray(reference_basis, dtype=float)
+        if partners.shape != (len(indices), 8) or np.any(partners < -1) or np.any(partners >= len(indices)):
+            raise AnalysisError("Invalid reciprocal neighbor map.")
+        if basis.shape != (2, 2):
+            raise AnalysisError("Reference basis must have shape (2, 2).")
+        validate_reference_lattice(basis[:, 0], basis[:, 1], max_condition=condition_limit)
+        from .lattice import REVERSE
+        for direction, reverse in enumerate(REVERSE):
+            rows = np.flatnonzero(partners[:, direction] >= 0)
+            if np.any(partners[partners[rows, direction], reverse] != rows) or np.any(partners[rows, direction] == rows):
+                raise AnalysisError("Neighbor map must contain reciprocal, distinct partners.")
+        unresolved = (np.zeros(len(indices), bool) if unresolved_mask is None
+                      else np.asarray(unresolved_mask, dtype=bool))
+        if unresolved.shape != (len(indices),):
+            raise AnalysisError("Invalid topology quality mask.")
+        for i, row in enumerate(partners):
+            if unresolved[i]:
+                invalid_reasons[i] = "lattice_topology_unresolved"
+                continue
+            if np.all(row[:4] >= 0):
+                da = .5*(deformed[row[1]]-deformed[row[0]])
+                db = .5*(deformed[row[3]]-deformed[row[2]])
+                gradients[i] = np.column_stack((da, db)) @ np.linalg.inv(basis)
+                quality_mask[i], site_quality[i], invalid_reasons[i] = True, "A-symmetric", ""
+                continue
+            available = row >= 0
+            if available.sum() < 2:
+                continue
+            DX = OFFSETS[available] @ basis.T
+            dx = deformed[row[available]]-deformed[i]
+            weights = 1./np.linalg.norm(DX, axis=1)
+            design = DX*np.sqrt(weights)[:, None]
+            if np.linalg.matrix_rank(design) < 2 or np.linalg.cond(design) > condition_limit:
+                continue
+            gradients[i] = np.linalg.lstsq(design, dx*np.sqrt(weights)[:, None], rcond=None)[0].T
+            quality_mask[i], invalid_reasons[i] = True, ""
+            site_quality[i] = "B-local-fit" if available.sum() >= 3 else "C-minimal-fit"
+        return _strain_from_F(gradients, reference.copy(), None,
+                              np.zeros(len(indices), bool), quality_mask,
+                              "peak-pairs-local-topology-v3", equivalent_coefficient,
+                              site_indices=np.arange(len(indices)), site_quality=site_quality,
+                              invalid_reasons=invalid_reasons)
 
     for i, (n, m) in enumerate(indices):
         neighbor_keys = ((n - 1, m), (n + 1, m), (n, m - 1), (n, m + 1))

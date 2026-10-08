@@ -1,6 +1,6 @@
 # PPA 开发约定
 
-这是公开仓库内的工具子项目，使用独立 `.venv`。主 GUI 为 [ppa.py](ppa.py)，统计 GUI 为 [ppa_stats.py](ppa_stats.py)，数值与存储模块在 ppa_core。按功能定位见 [DEVELOPMENT.md](DEVELOPMENT.md)，科学定义见 [README.md](README.md)。
+这是独立 Git 仓库。主 GUI 为 [ppa.py](ppa.py)，统计 GUI 为 [ppa_stats.py](ppa_stats.py)，数值与存储模块在 ppa_core。按功能定位见 [DEVELOPMENT.md](DEVELOPMENT.md)，科学定义见 [README.md](README.md)。
 
 ## 工作边界
 
@@ -26,20 +26,3 @@
 - 点表、后台流程和界面：tests/test_gui_workflow.py，需要 Tk 显示环境。
 - 改入口后加 TEM Suite 的 ppa_strain 冒烟检查，具体命令见开发说明。
 - 纯文档只检查导航和差异；环境缺失、GUI 跳过与功能通过分别记录。
-
-## 环境与验证
-
-- **解释器**：`.venv/Scripts/python.exe`（本项目独立 venv；清单登记 Python >=3.10，本机母本 3.10）。
-- **安装锁**：`requirements.lock.txt`；按锁安装，不要用 `pip install -r requirements.txt` 代替。
-- **建环境**：参考仓库根 [环境隔离说明](../../环境隔离说明.md) 与 [.tools/projects.json](../../.tools/projects.json)；常规 `provision-envs.py` 只读锁、`verify-envs.py` 只验证不安装。
-- **导入自检**：`numpy`、`scipy`、`matplotlib`、`tifffile`、`PIL`。
-- **注意**：tests/ 用标准库 unittest（原独立 92 项证据即 -m unittest discover -s tests -v），这是唯一登记入口：同一批测试不再按 pytest 重复跑一遍，也不要为它安装 pytest。
-
-从**本项目目录**执行：
-
-~~~powershell
-# unittest
-& ./.venv/Scripts/python.exe -m unittest discover -s tests -v
-~~~
-
-旧报告不代表当前通过；运行后按实际结果记录 pass / skip / 未运行。
