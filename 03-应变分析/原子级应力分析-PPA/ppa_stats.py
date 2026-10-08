@@ -23,11 +23,11 @@ for _stream in (sys.stdout, sys.stderr):
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
+    from tkinter import ttk, filedialog, messagebox, simpledialog
 except ModuleNotFoundError:
     # 无 Tk 环境（如最小测试容器）仍可导入纯数值函数。
     tk = None
-    ttk = filedialog = messagebox = None
+    ttk = filedialog = messagebox = simpledialog = None
 import numpy as np
 import matplotlib
 try:
@@ -48,6 +48,10 @@ import json
 import os
 import sys
 import datetime
+import hashlib
+from ppa_core.image_io import load_analysis_image, ImageLoadError
+from ppa_core.validation import finite_number
+from ppa_core.interpolation import interpolate_fields
 
 
 # ================================================================
@@ -85,6 +89,9 @@ class PPAData:
         self.n_tri = 0
         # 源 CSV 是否为物理坐标 (y 向上) 约定; 导入时已统一翻转为显示坐标
         self.physical_source = False
+        self.sources = {}
+        self.strain_support = None
+        self.filter_policy = {}
         self.algorithm_id = None   # sidecar 记录的算法来源 (peak-pairs-local 等)
 
     def check_algorithm_consistency(self, new_algorithm_id):
@@ -95,6 +102,33 @@ class PPAData:
                     "局部 Peak Pairs 与晶格-CST 的结果不可混合统计 "
                     "(元素几何与覆盖范围不同)。")
         return None
+
+    def validate_source(self, kind, metadata):
+        """Reject incompatible data before changing any live arrays."""
+        for old_kind, old in self.sources.items():
+            if old_kind == kind:
+                continue
+            old_identity, identity = old.get('image_identity'), metadata.get('image_identity')
+            if not old_identity or not identity:
+                raise ValueError('无法确认多份数据的原图与帧来源。请分别统计旧 CSV，或在主程序重新导出带身份元数据的文件。')
+            for key in ('sha256', 'size_bytes', 'frame_index'):
+                if old_identity.get(key) != identity.get(key):
+                    raise ValueError('数据来自不同原图或不同帧，不能混合统计。')
+            if old_kind in ('strain', 'displacement') and kind in ('strain', 'displacement'):
+                for key in ('algorithm_id', 'reference_lattice', 'equivalent_strain_coefficient'):
+                    if key not in old or key not in metadata or old[key] != metadata[key]:
+                        raise ValueError(f'结果的 {key} 不一致或未记录，不能混合统计。')
+        # Compatibility for clients with older containers constructed directly.
+        other_analysis = (kind == 'strain' and self.has_displacement()) or (kind == 'displacement' and self.has_strain())
+        if other_analysis:
+            note = self.check_algorithm_consistency(metadata.get('algorithm_id'))
+            if note:
+                raise ValueError(note)
+
+    def commit_source(self, kind, metadata):
+        self.sources[kind] = metadata.copy()
+        if kind in ('strain', 'displacement'):
+            self.algorithm_id = metadata.get('algorithm_id')
 
     def has_displacement(self):
         return self.displacements is not None
@@ -127,11 +161,28 @@ def read_export_metadata(filepath):
     meta_path = os.path.splitext(str(filepath))[0] + ".metadata.json"
     if not os.path.exists(meta_path):
         return {}
-    try:
-        with open(meta_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    if os.path.getsize(meta_path) > 4*1024*1024:
+        raise ValueError('CSV 元数据文件过大。')
+    with open(meta_path, 'r', encoding='utf-8') as f:
+        metadata = json.load(f, parse_constant=lambda value: (_ for _ in ()).throw(ValueError('元数据包含非有限数值')))
+    if not isinstance(metadata, dict):
+        raise ValueError('CSV 元数据必须为对象。')
+    if 'algorithm_id' in metadata and not isinstance(metadata['algorithm_id'], str):
+        raise ValueError('CSV 算法标识必须为字符串。')
+    geometry = metadata.get('element_geometry')
+    algorithm = metadata.get('algorithm_id', '')
+    if geometry is not None and ((algorithm.startswith('peak-pairs') and geometry != 'sites') or
+                                 (algorithm.startswith('lattice-cst') and geometry != 'triangles')):
+        raise ValueError('CSV 元素几何与算法不一致。')
+    expected = metadata.get('csv_sha256')
+    if expected:
+        digest = hashlib.sha256()
+        with open(filepath, 'rb') as f:
+            for block in iter(lambda: f.read(1024*1024), b''):
+                digest.update(block)
+        if digest.hexdigest() != expected:
+            raise ValueError('CSV 与元数据校验和不匹配，文件可能被修改或导出未完成。')
+    return metadata
 
 
 def detect_physical_convention(y_values, metadata=None):
@@ -228,6 +279,7 @@ def load_displacement_csv(filepath):
         'physical_source': physical,
         'convention_note': convention_detection_note(actual_pos[:, 1], metadata),
         'algorithm_id': metadata.get('algorithm_id') if metadata else None,
+        'provenance': metadata,
     }
 
 
@@ -326,6 +378,7 @@ def load_strain_csv(filepath):
     result['physical_source'] = physical
     result['convention_note'] = convention_detection_note(result['centroids'][:, 1], metadata)
     result['algorithm_id'] = metadata.get('algorithm_id') if metadata else None
+    result['provenance'] = metadata
     if physical:
         result['centroids'][:, 1] *= -1.0
         result['strain_xy'] = -result['strain_xy']
@@ -345,12 +398,12 @@ def load_strain_csv(filepath):
         result['gl_eq'] = gl_eq
     if has_edge:
         edge = _numeric_column(col_map['edge'], '边缘三角形')
-        if not np.isfinite(edge).all():
+        if not np.isfinite(edge).all() or not np.isin(edge, [0, 1]).all():
             raise ValueError("边缘三角形列包含 NaN 或 Infinity。")
         result['edge_mask'] = edge.astype(bool)
     if '参考三角形面积' in header:
         area = _numeric_column(header.index('参考三角形面积'), '参考三角形面积')
-        if not np.isfinite(area).all():
+        if not np.isfinite(area).all() or np.any(area <= 0):
             raise ValueError("参考三角形面积列包含 NaN 或 Infinity。")
         result['element_area'] = area
     if valid_mask is not None:
@@ -392,10 +445,13 @@ def load_atoms_csv(filepath):
         data = data.reshape(1, -1)
     if data.shape[1] < 3:
         raise ValueError("原子坐标 CSV 至少需要 3 列（编号, x, y）。")
+    if not np.isfinite(data).all():
+        raise ValueError('原子坐标 CSV 包含 NaN 或 Infinity。')
     atoms = data[:, 1:3].copy()
-    if detect_physical_convention(atoms[:, 1], read_export_metadata(filepath)):
+    metadata = read_export_metadata(filepath)
+    if detect_physical_convention(atoms[:, 1], metadata):
         atoms[:, 1] *= -1.0
-    return {'n': data.shape[0], 'atoms': atoms}
+    return {'n': data.shape[0], 'atoms': atoms, 'provenance': metadata}
 
 
 # ================================================================
@@ -456,7 +512,7 @@ def compute_strain_gradient(exx, eyy, exy, centroids):
 def compute_deformation_mode(e1, e2):
     """
     变形模式分类：
-    - e1 > 0, e2 < 0: 纯剪切
+    - e1 > 0, e2 < 0: 剪切主导
     - e1 > 0, e2 > 0: 双轴拉伸
     - e1 < 0, e2 < 0: 双轴压缩
     - e1 > 0, |e2| << e1: 单轴拉伸
@@ -477,7 +533,7 @@ def compute_deformation_mode(e1, e2):
             # Poisson contraction has e2 < 0.  Reserve "shear" for near-zero
             # trace / equal-and-opposite principal strains.
             opposite_ratio = abs(e2[i] / e1[i])
-            if opposite_ratio >= 0.8:
+            if 0.8 <= opposite_ratio <= 1.25:
                 mode[i] = 1  # shear-dominated
             elif opposite_ratio <= 0.5:
                 mode[i] = 2  # uniaxial tension with transverse contraction
@@ -560,6 +616,11 @@ class PPAStatsApp:
         frame = ttk.LabelFrame(parent, text="数据概览", padding=6)
         frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
 
+        self.weighting_var = tk.StringVar(value='面积加权')
+        weighting = ttk.Combobox(frame, textvariable=self.weighting_var,
+                                 values=('面积加权', '元素等权'), state='readonly', width=12)
+        weighting.pack(anchor=tk.W)
+        weighting.bind('<<ComboboxSelected>>', lambda event: self._update_status())
         self.stats_text = tk.Text(frame, height=12, font=('Consolas', 9), wrap=tk.WORD,
                                   state=tk.DISABLED, bg='#fafafa')
         self.stats_text.pack(fill=tk.BOTH, expand=True)
@@ -627,6 +688,36 @@ class PPAStatsApp:
         self.ax.set_title("PPA 统计分析")
         self.canvas.draw_idle()
 
+    def _strain_weights(self):
+        var = getattr(self, 'weighting_var', None)
+        return self.data.element_area if var is None or var.get() == '面积加权' else None
+
+    def _weighting_label(self):
+        return '面积加权' if self._strain_weights() is not None else '元素等权'
+
+    def _overlay_grids(self, grid_size):
+        payload = self.data.strain_support
+        if payload is None:
+            payload = {'centroids': self.data.tri_centroids,
+                       'strain_xx': self.data.strain_xx, 'strain_yy': self.data.strain_yy,
+                       'strain_xy': self.data.strain_xy, 'strain_eq': self.data.strain_eq,
+                       'rotation': self.data.rotation}
+        locations = payload['centroids']
+        if self.data.has_image():
+            h, w = self.data.image.shape
+            extent = (-.5, w-.5, -.5, h-.5)
+        else:
+            lo, hi = locations.min(axis=0)-5, locations.max(axis=0)+5
+            extent = (lo[0], hi[0], lo[1], hi[1])
+        values = {key: payload[key].copy() for key in
+                  ('strain_xx', 'strain_yy', 'strain_xy', 'strain_eq', 'rotation')}
+        keep = payload.get('overlay_keep')
+        if keep is not None:
+            for value in values.values():
+                value[~keep] = np.nan
+        grids = interpolate_fields(locations, values, extent, grid_size)
+        return grids, extent
+
     def _update_status(self):
         """刷新数据概览和状态栏"""
         parts = []
@@ -667,16 +758,16 @@ class PPAStatsApp:
                             if v is not None]
             for name, arr in strain_rows:
                 if arr is not None:
-                    mean, std = weighted_mean_std(arr, self.data.element_area)
-                    weighting = "面积加权" if self.data.element_area is not None else "元素等权"
+                    mean, std = weighted_mean_std(arr, self._strain_weights())
+                    weighting = self._weighting_label()
                     lines.append(f"  {name}: mean={mean:.6f}  std={std:.6f} ({weighting})")
                     lines.append(f"         min={arr.min():.6f}  max={arr.max():.6f}")
 
             e1, e2, theta = compute_principal_strains(
                 self.data.strain_xx, self.data.strain_yy, self.data.strain_xy)
             # 主应变与相邻行保持同一加权口径, 避免面板内数字不可比
-            e1_mean, e1_std = weighted_mean_std(e1, self.data.element_area)
-            e2_mean, e2_std = weighted_mean_std(e2, self.data.element_area)
+            e1_mean, e1_std = weighted_mean_std(e1, self._strain_weights())
+            e2_mean, e2_std = weighted_mean_std(e2, self._strain_weights())
             lines.append(f"  ε₁:   mean={e1_mean:.6f}  std={e1_std:.6f}")
             lines.append(f"  ε₂:   mean={e2_mean:.6f}  std={e2_std:.6f}")
 
@@ -696,11 +787,13 @@ class PPAStatsApp:
             return
         try:
             result = load_displacement_csv(path)
+            self.data.validate_source('displacement', result['provenance'])
             self.data.actual_pos = result['actual_pos']
             self.data.ideal_pos = result['ideal_pos']
             self.data.displacements = result['displacements']
             self.data.distortions = result['distortions']
             self.data.n_atoms = result['n']
+            self.data.commit_source('displacement', result['provenance'])
             self.data.physical_source = result.get('physical_source', False)
 
             if self.data.actual_pos is not None:
@@ -709,11 +802,6 @@ class PPAStatsApp:
             self.status.config(text=f"✓ 位移数据已导入: {result['n']} 个原子  |  {os.path.basename(path)}",
                                foreground='#006600')
             self._update_status()
-            algo_note = self.data.check_algorithm_consistency(result.get('algorithm_id'))
-            if algo_note:
-                messagebox.showwarning("算法来源不一致", algo_note)
-            elif result.get('algorithm_id'):
-                self.data.algorithm_id = result['algorithm_id']
             if result.get('convention_note'):
                 messagebox.showwarning("坐标约定判定", result['convention_note'])
         except Exception as e:
@@ -726,6 +814,7 @@ class PPAStatsApp:
             return
         try:
             result = load_strain_csv(path)
+            self.data.validate_source('strain', result['provenance'])
             original_count = result['n']
             excluded_edge_count = 0
             excluded_invalid_count = 0
@@ -738,6 +827,8 @@ class PPAStatsApp:
                 excluded_edge_count = int(result['edge_mask'].sum())
             if not keep.any():
                 raise ValueError("没有具有有限应变且通过质量筛选的元素可统计。")
+            support = dict(result)
+            support['overlay_keep'] = keep.copy()
             if not keep.all():
                 for key, value in list(result.items()):
                     if isinstance(value, np.ndarray) and len(value) == original_count:
@@ -745,6 +836,11 @@ class PPAStatsApp:
                 result['n'] = int(keep.sum())
             # 工单18：提交新文件数据前清空上一份文件残留的 GL 分量，
             # 否则新 CSV 无 GL 列时旧文件的 gl_* 会继续参与统计。
+            self.data.strain_support = support
+            self.data.filter_policy = {'total': original_count, 'invalid': excluded_invalid_count, 'edge': excluded_edge_count, 'retained': int(keep.sum())}
+            self.data.commit_source('strain', result['provenance'])
+            self.data.tri_edge = result.get('edge_mask')
+            self.data.tri_vertices = None
             self.data.strain_gl = {}
             self.data.tri_centroids = result['centroids']
             self.data.strain_xx = result['strain_xx']
@@ -771,11 +867,6 @@ class PPAStatsApp:
             self.status.config(text=f"✓ 应变数据已导入: {result['n']} 个有效元素{quality_note}  |  {os.path.basename(path)}",
                                foreground='#006600')
             self._update_status()
-            algo_note = self.data.check_algorithm_consistency(result.get('algorithm_id'))
-            if algo_note:
-                messagebox.showwarning("算法来源不一致", algo_note)
-            elif result.get('algorithm_id'):
-                self.data.algorithm_id = result['algorithm_id']
             if result.get('convention_note'):
                 messagebox.showwarning("坐标约定判定", result['convention_note'])
         except Exception as e:
@@ -788,6 +879,8 @@ class PPAStatsApp:
             return
         try:
             result = load_atoms_csv(path)
+            self.data.validate_source('atoms', result['provenance'])
+            self.data.commit_source('atoms', result['provenance'])
             self.data.atoms = result['atoms']
             self.data.n_atoms = result['n']
             self.status.config(text=f"✓ 原子坐标已导入: {result['n']} 个原子  |  {os.path.basename(path)}",
@@ -803,15 +896,25 @@ class PPAStatsApp:
         if not path:
             return
         try:
-            img = plt.imread(path)
-            if img.ndim == 3:
-                img = img[..., :3].mean(axis=2)
-            # 归一化
-            lo, hi = np.percentile(img, [1, 99])
-            if hi > lo:
-                img = np.clip((img - lo) / (hi - lo), 0, 1)
+            frame = None
+            identities = [meta['image_identity'] for meta in self.data.sources.values() if meta.get('image_identity')]
+            if identities:
+                frame = identities[0]['frame_index']
+            try:
+                loaded = load_analysis_image(path, frame_index=frame)
+            except ImageLoadError as error:
+                if identities or 'select a frame' not in str(error):
+                    raise
+                frame = simpledialog.askinteger('选择图像帧', str(error)+'\n请输入帧编号（从 0 开始）', minvalue=0, parent=self.root)
+                if frame is None:
+                    return
+                loaded = load_analysis_image(path, frame_index=frame)
+            identity = loaded.identity
+            self.data.validate_source('image', {'image_identity': identity})
+            img = loaded.pixels
             self.data.image = img.astype(np.float64)
             self.data.image_path = path
+            self.data.commit_source('image', {'image_identity': identity})
             self.status.config(text=f"✓ 底图已加载: {os.path.basename(path)} ({img.shape[1]}×{img.shape[0]})",
                                foreground='#006600')
             self._show_image()
@@ -962,8 +1065,8 @@ class PPAStatsApp:
             if arr is None:
                 ax_i.text(0.5, 0.5, 'No data', ha='center', va='center')
                 continue
-            ax_i.hist(arr, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
-            mu, sigma = arr.mean(), arr.std()
+            ax_i.hist(arr, bins=50, weights=self._strain_weights(), density=True, alpha=0.7, color='steelblue', edgecolor='white')
+            mu, sigma = weighted_mean_std(arr, self._strain_weights())
             if sigma > np.finfo(float).eps:
                 x = np.linspace(arr.min(), arr.max(), 200)
                 g = np.exp(-(x - mu)**2 / (2 * sigma**2)) / (sigma * np.sqrt(2 * np.pi))
@@ -971,18 +1074,18 @@ class PPAStatsApp:
             ax_i.axvline(mu, color='r', ls='--', alpha=0.5)
             ax_i.set_xlabel(name)
             ax_i.set_ylabel('Density')
-            ax_i.set_title(f'{name}: μ={mu:.5f}, σ={sigma:.5f}', fontsize=9)
+            ax_i.set_title(f'{name}: μ={mu:.5f}, σ={sigma:.5f} ({self._weighting_label()})', fontsize=9)
 
         # 剩余子图: 统计参数汇总
         for slot in range(stats_slot, len(axes)):
             axes[slot].axis('off')
-        stats_lines = []
+        stats_lines = ['Skew / kurtosis: element weights']
         for name, arr, *_ in fields:
             if arr is None:
                 continue
-            s = describe(arr)
+            mu, sigma = weighted_mean_std(arr, self._strain_weights())
             stats_lines.append(
-                f"{name}:  μ={arr.mean():.6f}  σ={arr.std():.6f}\n"
+                f"{name}: μ={mu:.6f} σ={sigma:.6f} ({self._weighting_label()})\n"
                 f"  min={arr.min():.6f}  max={arr.max():.6f}\n"
                 f"  skew={skew(arr):.3f}  kurt={kurtosis(arr):.3f}"
             )
@@ -990,7 +1093,7 @@ class PPAStatsApp:
             stats_ax = axes[stats_slot]
             stats_ax.text(0.05, 0.95, '\n\n'.join(stats_lines),
                           transform=stats_ax.transAxes, va='top', fontsize=8,
-                          fontfamily='monospace')
+                          fontfamily='sans-serif')
             stats_ax.set_title('Statistics', fontsize=10)
 
         self.fig.tight_layout()
@@ -1056,7 +1159,7 @@ class PPAStatsApp:
 
         # 左图：变形模式空间分布
         mode_colors = ['gray', 'red', 'orange', 'green', 'blue', 'purple']
-        mode_labels = ['Zero', 'Shear', 'Uni. tension', 'Biaxial', 'Compression', 'Mixed']
+        mode_labels = ['Zero', 'Shear-dom.', 'Uni. tension', 'Biaxial', 'Compression', 'Mixed']
         mode_cmap = plt.matplotlib.colors.ListedColormap(mode_colors)
         sc = axes[0].scatter(self.data.tri_centroids[:, 0], self.data.tri_centroids[:, 1],
                              c=modes, cmap=mode_cmap, s=20, alpha=0.8, vmin=0, vmax=5)
@@ -1189,39 +1292,22 @@ class PPAStatsApp:
         if not self.data.has_strain():
             messagebox.showinfo("提示", "请先导入应变 CSV")
             return
-        grid_size = int(self.grid_size_var.get())
+        try:
+            grid_size = finite_number(self.grid_size_var.get(), '网格', minimum=50, maximum=500, integer=True)
+        except ValueError as error:
+            messagebox.showerror('参数错误', str(error))
+            return
 
         self.ax.clear()
         if self.data.has_image():
             self.ax.imshow(self.data.image, cmap='gray', origin='upper', aspect='equal')
 
-        centroids = self.data.tri_centroids
-        if self.data.has_image():
-            h_img = self.data.image.shape[0]
-            w_img = self.data.image.shape[1]
-            x_lo, x_hi = 0.0, float(w_img)
-            y_lo, y_hi = 0.0, float(h_img)
-        else:
-            # 无底图时按质心实际范围建网格 (ROI 不从原点开始时避免全 NaN 空图)
-            h_img = centroids[:, 1].max() + 10
-            w_img = centroids[:, 0].max() + 10
-            pad = 5.0
-            x_lo = max(0.0, float(centroids[:, 0].min()) - pad)
-            x_hi = float(centroids[:, 0].max()) + pad
-            y_lo = max(0.0, float(centroids[:, 1].min()) - pad)
-            y_hi = float(centroids[:, 1].max()) + pad
-
-        # 创建插值网格
-        gx = np.linspace(x_lo, x_hi, grid_size)
-        gy = np.linspace(y_lo, y_hi, grid_size)
-        GX, GY = np.meshgrid(gx, gy)
-        grid_pts = np.column_stack((GX.ravel(), GY.ravel()))
-
-        # 选择插值分量（默认 ε_eq）
-        interp = griddata(centroids, self.data.strain_eq, grid_pts,
-                          method='linear', fill_value=np.nan)
-        interp = interp.reshape(grid_size, grid_size)
-
+        grids, extent = self._overlay_grids(grid_size)
+        x_lo, x_hi, y_lo, y_hi = extent
+        interp = grids['strain_eq']
+        if not np.isfinite(interp).any():
+            self._show_message('没有可插值的有效覆盖区域')
+            return
         vmin, vmax = np.nanpercentile(interp, [2, 98])
         if vmin == vmax or np.isnan(vmin):
             vmin, vmax = np.nanmin(interp), np.nanmax(interp)
@@ -1247,16 +1333,26 @@ class PPAStatsApp:
         return self.output_dir
 
     def _generate_all_plots(self):
+        figures_before = set(plt.get_fignums())
+        try:
+            self._generate_all_plots_impl()
+        except (OSError, ValueError) as error:
+            messagebox.showerror('生成失败', f'报告生成未完成，输出目录可能含部分文件：\n{error}')
+        finally:
+            for number in set(plt.get_fignums())-figures_before:
+                plt.close(number)
+
+    def _generate_all_plots_impl(self):
         """生成所有图表并保存到输出目录"""
         if not self.data.has_strain() and not self.data.has_displacement():
             messagebox.showinfo("提示", "请先导入至少一个 CSV 数据文件")
             return
 
         out_dir = self._ensure_output_dir()
-        dpi = int(self.dpi_var.get())
+        dpi = finite_number(self.dpi_var.get(), 'DPI', minimum=100, maximum=600, integer=True)
         fig_dir = os.path.join(out_dir, "图")
         data_dir = os.path.join(out_dir, "数据")
-        grid_size = int(self.grid_size_var.get())
+        grid_size = finite_number(self.grid_size_var.get(), '网格', minimum=50, maximum=500, integer=True)
 
         self.status.config(text="生成图表中...")
         self.root.update_idletasks()
@@ -1333,8 +1429,8 @@ class PPAStatsApp:
                 if arr is None:
                     axes[i].text(0.5, 0.5, 'No data', ha='center', va='center')
                     continue
-                axes[i].hist(arr, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='white')
-                mu, sigma = arr.mean(), arr.std()
+                axes[i].hist(arr, bins=50, weights=self._strain_weights(), density=True, alpha=0.7, color='steelblue', edgecolor='white')
+                mu, sigma = weighted_mean_std(arr, self._strain_weights())
                 if sigma > np.finfo(float).eps:  # 常数数据 (如理想晶格) 无高斯曲线
                     x = np.linspace(arr.min(), arr.max(), 200)
                     g = np.exp(-(x - mu)**2 / (2 * sigma**2)) / (sigma * np.sqrt(2 * np.pi))
@@ -1342,7 +1438,7 @@ class PPAStatsApp:
                 axes[i].axvline(mu, color='r', ls='--', alpha=0.5)
                 axes[i].set_xlabel(name)
                 axes[i].set_ylabel('Density')
-                axes[i].set_title(f'{name}: μ={mu:.5f}, σ={sigma:.5f}')
+                axes[i].set_title(f'{name}: μ={mu:.5f}, σ={sigma:.5f} ({self._weighting_label()})')
             for i in range(len(all_strain), len(axes)):
                 axes[i].axis('off')
             plt.tight_layout()
@@ -1434,7 +1530,7 @@ class PPAStatsApp:
             modes, ratio = compute_deformation_mode(e1, e2)
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
             mode_colors = ['gray', 'red', 'orange', 'green', 'blue', 'purple']
-            mode_labels = ['Zero', 'Shear', 'Uni. tens.', 'Biaxial', 'Compress.', 'Mixed']
+            mode_labels = ['Zero', 'Shear-dom.', 'Uni. tens.', 'Biaxial', 'Compress.', 'Mixed']
             mode_cmap = plt.matplotlib.colors.ListedColormap(mode_colors)
             sc = axes[0].scatter(centroids[:, 0], centroids[:, 1], c=modes,
                                  cmap=mode_cmap, s=20, alpha=0.8, vmin=0, vmax=5)
@@ -1482,26 +1578,8 @@ class PPAStatsApp:
 
             # 9. 应变云图叠加(底图)
             if True:
-                # 无底图时按质心实际范围建网格: ROI 不从原点开始时, 固定从 0 起
-                # 会让大部分格点落在凸包外 (全 NaN), 甚至因 NaN 色标崩溃
-                if self.data.has_image():
-                    h_img = self.data.image.shape[0]
-                    w_img = self.data.image.shape[1]
-                    x_lo, x_hi = 0.0, float(w_img)
-                    y_lo, y_hi = 0.0, float(h_img)
-                else:
-                    h_img = centroids[:, 1].max() + 10
-                    w_img = centroids[:, 0].max() + 10
-                    pad = 5.0
-                    x_lo = max(0.0, float(centroids[:, 0].min()) - pad)
-                    x_hi = float(centroids[:, 0].max()) + pad
-                    y_lo = max(0.0, float(centroids[:, 1].min()) - pad)
-                    y_hi = float(centroids[:, 1].max()) + pad
-                gx = np.linspace(x_lo, x_hi, grid_size)
-                gy = np.linspace(y_lo, y_hi, grid_size)
-                GX, GY = np.meshgrid(gx, gy)
-                grid_pts = np.column_stack((GX.ravel(), GY.ravel()))
-
+                overlay_grids, extent = self._overlay_grids(grid_size)
+                x_lo, x_hi, y_lo, y_hi = extent
                 fig, axes = plt.subplots(2, 3, figsize=(15, 9))
                 axes = axes.flatten()
                 all_keys = [('ε_xx', self.data.strain_xx, 'RdBu_r'),
@@ -1513,8 +1591,11 @@ class PPAStatsApp:
                     if arr is None:
                         axes[ax_i].text(0.5, 0.5, 'No data', ha='center', va='center')
                         continue
-                    interp = griddata(centroids, arr, grid_pts,
-                                      method='linear', fill_value=np.nan).reshape(grid_size, grid_size)
+                    field = ('strain_xx', 'strain_yy', 'strain_xy', 'strain_eq', 'rotation')[ax_i]
+                    interp = overlay_grids[field]
+                    if not np.isfinite(interp).any():
+                        axes[ax_i].text(.5, .5, 'No supported region', ha='center', va='center')
+                        continue
                     vmin, vmax = np.nanpercentile(interp, [2, 98])
                     if vmin == vmax or np.isnan(vmin):
                         vmin, vmax = np.nanmin(interp), np.nanmax(interp)
@@ -1535,7 +1616,7 @@ class PPAStatsApp:
 
         # --- 导出统计数据 ---
         csv_path = os.path.join(data_dir, "统计数据.csv")
-        has_area = self.data.element_area is not None
+        has_area = self._strain_weights() is not None
         with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
             writer.writerow(["量", "均值", "标准差", "最小值", "最大值", "中位数", "偏度", "峰度",
@@ -1564,30 +1645,30 @@ class PPAStatsApp:
                 for name, arr in strain_rows:
                     if arr is None:
                         continue
-                    w_mean, w_std = weighted_mean_std(arr, self.data.element_area)
+                    w_mean, w_std = weighted_mean_std(arr, self._strain_weights())
                     writer.writerow([name, f"{arr.mean():.6f}", f"{arr.std():.6f}",
                                      f"{arr.min():.6f}", f"{arr.max():.6f}",
                                      f"{np.median(arr):.6f}",
                                      f"{skew(arr):.3f}", f"{kurtosis(arr):.3f}",
                                      f"{w_mean:.6f}" if has_area else "",
                                      f"{w_std:.6f}" if has_area else "",
-                                     "面积加权" if has_area else "元素等权(无面积数据)"])
+                                     self._weighting_label()])
                 e1, e2, _ = compute_principal_strains(
                     self.data.strain_xx, self.data.strain_yy, self.data.strain_xy)
-                e1_w = weighted_mean_std(e1, self.data.element_area)
-                e2_w = weighted_mean_std(e2, self.data.element_area)
+                e1_w = weighted_mean_std(e1, self._strain_weights())
+                e2_w = weighted_mean_std(e2, self._strain_weights())
                 writer.writerow(["ε₁ (主应变)", f"{e1.mean():.6f}", f"{e1.std():.6f}",
                                  f"{e1.min():.6f}", f"{e1.max():.6f}",
                                  f"{np.median(e1):.6f}", f"{skew(e1):.3f}", f"{kurtosis(e1):.3f}",
                                  f"{e1_w[0]:.6f}" if has_area else "",
                                  f"{e1_w[1]:.6f}" if has_area else "",
-                                 "面积加权" if has_area else "元素等权(无面积数据)"])
+                                 self._weighting_label()])
                 writer.writerow(["ε₂ (次应变)", f"{e2.mean():.6f}", f"{e2.std():.6f}",
                                  f"{e2.min():.6f}", f"{e2.max():.6f}",
                                  f"{np.median(e2):.6f}", f"{skew(e2):.3f}", f"{kurtosis(e2):.3f}",
                                  f"{e2_w[0]:.6f}" if has_area else "",
                                  f"{e2_w[1]:.6f}" if has_area else "",
-                                 "面积加权" if has_area else "元素等权(无面积数据)"])
+                                 self._weighting_label()])
         generated.append("统计数据.csv")
 
         # --- 摘要报告 ---
@@ -1596,6 +1677,8 @@ class PPAStatsApp:
             f.write("PPA 统计分析报告\n")
             f.write(f"生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 50 + "\n\n")
+            f.write("数据来源: " + json.dumps(self.data.sources, ensure_ascii=False) + "\n")
+            f.write("质量筛选: " + json.dumps(self.data.filter_policy, ensure_ascii=False) + "\n\n")
             if self.data.has_displacement():
                 d = self.data.distortions
                 f.write("【位移场】\n")
@@ -1608,7 +1691,7 @@ class PPAStatsApp:
                 f.write("【应变张量】\n")
                 f.write(f"  元素数量: {self.data.n_tri}\n")
                 f.write(f"  坐标约定: 源CSV为{'物理坐标(y向上); 导入时已翻转为显示坐标(y向下), ε_xy/θ已变号' if self.data.physical_source else '图像显示坐标(y向下)'}\n")
-                f.write(f"  统计口径: 面积加权 (μ±σ 后标注[面积加权]); 无标注为元素等权\n")
+                f.write(f"  统计口径: {self._weighting_label()}；CSV 基础描述列、相关性和模式计数为元素等权\n")
                 strain_rows = [("ε_xx", self.data.strain_xx), ("ε_yy", self.data.strain_yy),
                                ("ε_xy", self.data.strain_xy), ("ε_eq", self.data.strain_eq),
                                ("ω", self.data.rotation)]
@@ -1618,19 +1701,19 @@ class PPAStatsApp:
                                 if v is not None]
                 for name, arr in strain_rows:
                     if arr is not None:
-                        w_mean, w_std = weighted_mean_std(arr, self.data.element_area)
-                        note = " [面积加权]" if self.data.element_area is not None else ""
+                        w_mean, w_std = weighted_mean_std(arr, self._strain_weights())
+                        note = f" [{self._weighting_label()}]"
                         f.write(f"  {name}: μ={w_mean:.6f} ± {w_std:.6f}{note}  "
                                 f"[{arr.min():.6f}, {arr.max():.6f}]\n")
                 e1, e2, _ = compute_principal_strains(
                     self.data.strain_xx, self.data.strain_yy, self.data.strain_xy)
-                e1_w = weighted_mean_std(e1, self.data.element_area)
-                e2_w = weighted_mean_std(e2, self.data.element_area)
+                e1_w = weighted_mean_std(e1, self._strain_weights())
+                e2_w = weighted_mean_std(e2, self._strain_weights())
                 f.write(f"  ε₁: μ={e1_w[0]:.6f} ± {e1_w[1]:.6f}\n")
                 f.write(f"  ε₂: μ={e2_w[0]:.6f} ± {e2_w[1]:.6f}\n\n")
                 f.write("【变形模式】\n")
                 modes, _ = compute_deformation_mode(e1, e2)
-                mode_labels = ['零应变', '纯剪切', '单轴拉伸', '等双轴拉伸', '双轴压缩', '混合']
+                mode_labels = ['零应变', '剪切主导', '单轴拉伸', '等双轴拉伸', '双轴压缩', '混合']
                 total = len(modes)
                 for m in range(6):
                     count = sum(modes == m)

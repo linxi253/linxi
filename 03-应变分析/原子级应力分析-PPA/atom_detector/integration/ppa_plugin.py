@@ -213,6 +213,8 @@ class DLDetectDialog:
                 self.status_var.set(f"已丢弃本次检测结果 ({len(points)} 个原子)")
                 self.detect_btn.config(state='normal')
                 return
+            if hasattr(self.app, '_record_undo'):
+                self.app._record_undo('replace', list(self.app.points))
             if choice:
                 self.app.points.extend(points)
             else:

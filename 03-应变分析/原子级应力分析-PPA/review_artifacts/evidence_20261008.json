@@ -1,0 +1,302 @@
+{
+  "review_date": "2026-10-08",
+  "interpreter": "H:\\AIforTEM\\03-应变分析\\原子级应力分析-PPA\\.venv\\Scripts\\python.exe",
+  "source_sha256": {
+    "ppa.py": "4b3f5ae863470ee77cbf455bbf73befcc61ad5e7bd6af59174621b871dca223e",
+    "ppa_stats.py": "21be2ed0debd86dfec0b66c87f7bcc5df7723d764f2fecec1becfcdec30b382d",
+    "ppa_core/strain.py": "4bfb55acd0ae7fdcc88c97f42a2b117e90d176520c40224d5bfe69f58e73dd7f",
+    "ppa_core/project_store.py": "2f38a02af0c88d7bc34a8371b56cc050edf2ce1f62b01d6540b178a9d865805c",
+    "ppa_core/image_io.py": "e2a2972445737ed7a03ecea88d9d8ff2c72a6ea50d55b2692aca8e166666d447",
+    "ppa_core/refine.py": "dd75920a704d37d8eeee020fe9be3d339bcb3094d620f6db7a5f51a287d0a7a9",
+    "pyproject.toml": "b5fb11f13d4fcd4a4787775a1f674ac89681016d961e2c9d1079278103c5fc81",
+    "requirements.lock.txt": "4d0c9cf9e3e2714b2b105ef784579a8dd77904c474a6741a4c6f7000e7018c3f",
+    "atom_detector/dataset/prepare_dataset.py": "142b2f5ef89b09a83a2e1f22793bc92361f9bc5008a7d3b7c864d6db947dc014",
+    "atom_detector/infer/detector.py": "f424b10a0113dac8c1f4ead4a2656b9b296ff4a7b9fc94c14a523ce0d8d054dd",
+    "atom_detector/model_security.py": "a350e0a556a108a642589a4722bb238338d2ac1d1d6cc566233dfc22d759b52c"
+  },
+  "note": "Observed means reproduced in this working tree, not fixed. GUI dialogs and thread dispatch are mocked; calculations and state mutations are real.",
+  "probes": {
+    "probe_alias": {
+      "observed": {
+        "rows": 1200,
+        "conflicts": 0,
+        "expected_xy": 0.01,
+        "observed_range": [
+          -0.29473785412436504,
+          0.010000000000000519
+        ],
+        "wrong_rows": 48,
+        "wrong_grade_A": 40,
+        "low_confidence_rows": 121,
+        "control_max_error": 5.186823193170653e-16
+      }
+    },
+    "probe_nonphysical_F": {
+      "observed": [
+        {
+          "method": "local",
+          "det_F": -1.0,
+          "valid_rows": 25,
+          "rows": 25,
+          "max_gl_equivalent": 3.4093043818833327e-16
+        },
+        {
+          "method": "cst",
+          "det_F": -1.0,
+          "valid_rows": 32,
+          "rows": 32,
+          "max_gl_equivalent": 0.0
+        },
+        {
+          "method": "local",
+          "det_F": 0.0,
+          "valid_rows": 25,
+          "rows": 25,
+          "max_gl_equivalent": 0.3333333333333335
+        },
+        {
+          "method": "cst",
+          "det_F": 0.0,
+          "valid_rows": 32,
+          "rows": 32,
+          "max_gl_equivalent": 0.3333333333333333
+        }
+      ]
+    },
+    "probe_reset_stale_result": {
+      "observed": {
+        "generation_before": 2,
+        "generation_after": 2,
+        "points": 0,
+        "image_is_none": true,
+        "stale_strain_rows": 25
+      }
+    },
+    "probe_result_metadata": {
+      "observed": {
+        "csv_unchanged": true,
+        "generation_unchanged": true,
+        "algorithm_before": "peak-pairs-local-all-points-v2",
+        "algorithm_after": "lattice-cst-legacy",
+        "coefficient_before": 0.4444444444444444,
+        "coefficient_after": 0.9,
+        "geometry": "sites"
+      }
+    },
+    "probe_refined_reference": {
+      "observed": {
+        "effective_a": [
+          10.000000000000009,
+          5.329070518200751e-15
+        ],
+        "exported_a": [
+          10.1,
+          0.0
+        ],
+        "refined_atoms": 36,
+        "clearing_region_keeps_result": true,
+        "clearing_region_keeps_generation": true
+      }
+    },
+    "probe_image_replaced_before_save": {
+      "observed": {
+        "replacement_hash_saved": true,
+        "later_identity_validation_passes": true,
+        "loaded_pixels_match_replacement": false
+      }
+    },
+    "probe_project_validation": {
+      "observed": {
+        "nan_point": {
+          "exception": null,
+          "previous_image_replaced": true,
+          "previous_points_lost": true,
+          "nan_accepted": true
+        },
+        "malformed_point": {
+          "exception": "ValueError: not enough values to unpack (expected 2, got 1)",
+          "previous_image_replaced": true,
+          "previous_points_lost": true,
+          "nan_accepted": false
+        },
+        "out_of_bounds": {
+          "exception": null,
+          "previous_image_replaced": true,
+          "previous_points_lost": true,
+          "nan_accepted": false
+        },
+        "strict_json_rejects_saved_file": "NaN"
+      }
+    },
+    "probe_sidecar_failure": {
+      "observed": {
+        "csv_written": true,
+        "metadata_write_failed": true,
+        "success_reported": true,
+        "error_reported": false
+      }
+    },
+    "probe_tiff_axes": {
+      "observed": {
+        "tiff_axes": "QYX",
+        "source_shape": [
+          2,
+          12,
+          3
+        ],
+        "expected_selected_shape": [
+          12,
+          3
+        ],
+        "actual_shape": [
+          2,
+          12
+        ],
+        "requested_frame": 1,
+        "saved_frame": null,
+        "frame_count": 1
+      }
+    },
+    "probe_border_com": {
+      "observed": {
+        "true_center": [
+          0.4,
+          10.3
+        ],
+        "scalar": [
+          0.7213672804017403,
+          10.276256817059176
+        ],
+        "batch": [
+          -2.220446049250313e-16,
+          10.29753171298984
+        ],
+        "difference_px": 0.721680936724162
+      }
+    },
+    "probe_interpolation": {
+      "observed": {
+        "nonnegative_sample_min": 5.47700034029619e-05,
+        "negative_equivalent_grid_min": -0.00046029468859184715,
+        "missing_site_coordinate": [
+          25,
+          25
+        ],
+        "grid_value_at_missing_site": 0.01
+      }
+    },
+    "probe_grid_registration": {
+      "observed": {
+        "image_side_px": 4096,
+        "grid_size": 200,
+        "maximum_sample_vs_display_center_offset_px": 10.24
+      }
+    },
+    "probe_stats_provenance": {
+      "observed": {
+        "mismatched_strain_committed": true,
+        "old_displacement_retained": true,
+        "warning_shown": true,
+        "stored_algorithm": "peak-pairs-local-all-points-v2",
+        "incoming_algorithm": "lattice-cst-legacy"
+      }
+    },
+    "probe_histogram_weighting": {
+      "observed": {
+        "panel_mean": 0.01,
+        "plot_mean": 0.5,
+        "plot_title": "ε_xx: μ=0.50000, σ=0.50000",
+        "area_weights": [
+          99,
+          1
+        ]
+      }
+    },
+    "probe_mode_classification": {
+      "observed": {
+        "principal_strains": [
+          0.01,
+          -0.1
+        ],
+        "trace": -0.09,
+        "returned_mode": 1,
+        "label": "shear-dominated"
+      }
+    },
+    "probe_undo_after_replace": {
+      "observed": {
+        "replacement_points": [
+          [
+            20,
+            20
+          ],
+          [
+            30,
+            30
+          ]
+        ],
+        "points_after_undo": [
+          [
+            30.0,
+            30.0
+          ]
+        ],
+        "old_action_removed_new_atom": true
+      }
+    },
+    "probe_optional_dataset_rerun": {
+      "observed": {
+        "train_test_duplicate_stems": [
+          "4"
+        ],
+        "split_file_counts": {
+          "train": 5,
+          "val": 4,
+          "test": 4
+        }
+      }
+    },
+    "probe_bounded_performance": {
+      "observed": {
+        "lattice_matching_on_gui_thread": [
+          {
+            "rows": 2500,
+            "seconds": 0.01990980003029108
+          },
+          {
+            "rows": 10000,
+            "seconds": 0.12437509989831597
+          }
+        ],
+        "com_10000_atoms_window_101_single_array_bytes": 816080000,
+        "note": "COM also allocates percentile/background and roi_sub temporaries; timing is local only."
+      }
+    },
+    "probe_detection_input_snapshot": {
+      "observed": {
+        "submitted_peak": [
+          10,
+          10
+        ],
+        "returned_peak": [
+          30.0,
+          30.0
+        ],
+        "generation_unchanged": true
+      }
+    },
+    "probe_close_callback": {
+      "observed": {
+        "poll_callback_pending_after_window_destroy": true
+      }
+    },
+    "probe_png_failed_success_status": {
+      "observed": {
+        "file_written": false,
+        "error_shown": true,
+        "success_status_shown": true
+      }
+    }
+  },
+  "probe_errors": []
+}

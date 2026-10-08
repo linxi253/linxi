@@ -56,6 +56,8 @@ def prepare_dataset(image_dir, label_dir, output_dir, imgsz=640,
     划分按"原图分组"进行: 同一原图的 `_aug_` 增强变体永远进入同一
     子集, 防止 train/test 泄漏。
     """
+    if not np.isfinite([train_ratio, val_ratio, test_ratio]).all():
+        raise ValueError("划分比例必须为有限数值")
     ratio_sum = train_ratio + val_ratio + test_ratio
     if abs(ratio_sum - 1.0) > 1e-6:
         raise ValueError(
@@ -66,6 +68,11 @@ def prepare_dataset(image_dir, label_dir, output_dir, imgsz=640,
     image_dir = Path(image_dir)
     label_dir = Path(label_dir)
     output_dir = Path(output_dir)
+
+    # A second split must not retain samples from an earlier train/test split.
+    # Refuse reuse without deleting any existing datasets.
+    if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):
+        raise ValueError("输出目录必须为空。请为本次划分选择新的目录，避免旧样本跨 train/test 泄漏。")
 
     # 创建目录结构
     for split in ['train', 'val', 'test']:

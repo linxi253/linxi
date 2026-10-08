@@ -17,3 +17,13 @@ datasets/
 raw_images/
 raw_labels/
 yolo_labels/
+
+# Standalone repository: there is no parent Git ignore configuration.
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.pt
+*.onnx
+runs/

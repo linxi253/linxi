@@ -27,7 +27,7 @@ Versions are taken from each tool's code constants (`__version__` / `pyproject.t
 | Image processing | TIF image filters | 1.2.0 | `02-图像处理/图像加滤镜工具` | `main.py` |
 | Image processing | Delocalization removal | 1.1.0 | `02-图像处理/离域效应去除工具` | `main.py` |
 | Strain analysis | Strain++ GPA ⚠️ GPL | 1.4.1 | `03-应变分析/strainpp-GPA应变分析` | `run.py` |
-| Strain analysis | PPA atomic displacement & strain analysis | 3.4.0 | `03-应变分析/原子级应力分析-PPA` | `ppa.py` |
+| Strain analysis | PPA atomic displacement & strain analysis | 3.4.1 | `03-应变分析/原子级应力分析-PPA` | `ppa.py` |
 | Strain analysis | Atom identification & intensity analysis | 1.3.0 | `03-应变分析/原子识别纯算法` | `atomic_app.py` |
 | Strain analysis | Atom-center recognition model (training/inference) | 0.3.0 | `03-应变分析/原子中心识别模型开发` | `src/atom_center` |
 | Statistics | TIF atomic contrast statistics | 2.5.0 | `04-统计分析/原子衬度统计` | `tif图像衬度分析工具.py` |

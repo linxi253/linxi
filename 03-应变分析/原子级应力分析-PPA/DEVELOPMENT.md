@@ -12,7 +12,7 @@
 
 ## 大文件中的功能定位
 
-ppa.py 同时包含纯辅助函数、GUI、状态管理和导出。先按符号定位相关段落；本次导航没有调整文件结构或导入方式。
+ppa.py 同时包含纯辅助函数、GUI、状态管理和导出。先按符号定位相关段落；通过现有导航定位 GUI；新边界模块按数据契约组织，保留 AtomMarkerApp 集成接口。
 
 | 修改目标 | 文件与符号 |
 |---|---|
@@ -25,6 +25,11 @@ ppa.py 同时包含纯辅助函数、GUI、状态管理和导出。先按符号�
 | 数值应变与参考格校验 | [ppa_core/strain.py](ppa_core/strain.py)：validate_reference_lattice、compute_local_peak_pair_strain、compute_cst_strain |
 | 图像与帧选择 | [ppa_core/image_io.py](ppa_core/image_io.py)：load_analysis_image |
 | 项目格式与原图身份 | [ppa_core/project_store.py](ppa_core/project_store.py)：image_identity、save_project、load_project |
+| 局部邻居拓扑 | [ppa_core/lattice.py](ppa_core/lattice.py)：local_lattice_topology |
+| 项目与参数边界 | [ppa_core/validation.py](ppa_core/validation.py)：validate_project_data、finite_number |
+| CSV 与元数据提交 | [ppa_core/export_store.py](ppa_core/export_store.py)：CsvExport |
+| 云图支持域和采样 | [ppa_core/interpolation.py](ppa_core/interpolation.py)：interpolate_fields |
+| 审查反例回归 | [tests/test_review_fixes.py](tests/test_review_fixes.py) |
 | 核心公开导入 | [ppa_core/__init__.py](ppa_core/__init__.py) |
 | CSV 读入、坐标和统计 | [ppa_stats.py](ppa_stats.py)：load_displacement_csv、load_strain_csv、detect_physical_convention、compute_strain_gradient |
 
@@ -62,21 +67,24 @@ ppa.py 同时包含纯辅助函数、GUI、状态管理和导出。先按符号�
 & ./.venv/Scripts/python.exe -m unittest discover -s tests -v
 ~~~
 
-现有声明有一处需在以后环境维护时核实：pyproject.toml 将 Pillow 限定为 <12，而当前运行锁记录 pillow==12.3.0（2026-09-29 检查）。本轮保留两者原样；不能从“锁文件存在”推断安装元数据一致或环境已验证。
+运行锁与源码元数据分别核对。当前 Pillow 声明为 >=9，与锁定的 12.3.0 一致；测试成功不代表独立 CVE、实验标定或成品 EXE 验证。
 
-## 环境与验证
+## 验证范围
 
-- **解释器**：`.venv/Scripts/python.exe`（本项目独立 venv；清单登记 Python >=3.10，本机母本 3.10）。
-- **安装锁**：`requirements.lock.txt`；按锁安装，不要用 `pip install -r requirements.txt` 代替。
-- **建环境**：参考仓库根 [环境隔离说明](../../环境隔离说明.md) 与 [.tools/projects.json](../../.tools/projects.json)；常规 `provision-envs.py` 只读锁、`verify-envs.py` 只验证不安装。
-- **导入自检**：`numpy`、`scipy`、`matplotlib`、`tifffile`、`PIL`。
-- **注意**：tests/ 用标准库 unittest（原独立 92 项证据即 -m unittest discover -s tests -v），这是唯一登记入口：同一批测试不再按 pytest 重复跑一遍，也不要为它安装 pytest。
+| 测试 | 关注点 |
+|---|---|
+| [test_core.py](tests/test_core.py) | 应变、图像/项目持久化、辅助函数与模型安全；会导入 ppa、ppa_stats 和 atom_detector 部分模块 |
+| [test_fix_regressions.py](tests/test_fix_regressions.py) | 阈值、任务失效、CSV/BOM 与可选检测子项目回归 |
+| [test_gui_workflow.py](tests/test_gui_workflow.py) | 保留确认原子、参考格流程、显示与后台任务；无 Tk 时部分测试跳过 |
 
-从**本项目目录**执行：
+更改主 GUI 构造入口后，在全整合目录执行：
 
 ~~~powershell
-# unittest
-& ./.venv/Scripts/python.exe -m unittest discover -s tests -v
+& ./.venv/Scripts/python.exe tests/smoke_test.py ppa_strain
 ~~~
 
-旧报告不代表当前通过；运行后按实际结果记录 pass / skip / 未运行。
+核对实际执行了 ppa_strain。算法改动应比较固定合成晶格/参考态下的结果与质量字段；图形能打开不能代替科学回归。文档改动仅需工作区 [只读导航检查](../../.tools/check-codex-navigation.py) 和差异检查。
+
+## 2026-10-08 修复验证
+
+19 项审查问题的修复、验收映射和剩余范围见 [更新报告](review_artifacts/PPA_DEEP_REVIEW_2026-10-08.md)。历史缺陷探针不应在修复版本重跑并覆盖原始证据；执行 `-m unittest tests.test_review_fixes -v` 验证修复。

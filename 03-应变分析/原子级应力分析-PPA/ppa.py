@@ -84,11 +84,12 @@ from matplotlib.collections import EllipseCollection
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
 from scipy.ndimage import maximum_filter, gaussian_filter
-from scipy.interpolate import griddata, CloughTocher2DInterpolator
+from scipy.interpolate import griddata
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 import csv
 import logging
+import copy
 import os
 import sys
 import queue
@@ -110,8 +111,11 @@ from ppa_core import (
     validate_max_condition,
     validate_reference_lattice,
 )
+from ppa_core.lattice import local_lattice_topology
+from ppa_core.validation import finite_number, validate_project_data
+from ppa_core.export_store import CsvExport
 
-LOCAL_PPA_ALGORITHM_ID = "peak-pairs-local-all-points-v2"
+LOCAL_PPA_ALGORITHM_ID = "peak-pairs-local-topology-v3"
 
 logger = logging.getLogger(__name__)
 
@@ -165,20 +169,13 @@ def greedy_nms(coords, min_distance):
         return np.empty((0, 2), dtype=coords.dtype)
 
     tree = cKDTree(coords)
-    pairs = tree.query_pairs(min_distance, output_type="ndarray")
-    neighbors: dict[int, list[int]] = {}
-    for i, j in pairs:
-        neighbors.setdefault(int(i), []).append(int(j))
-        neighbors.setdefault(int(j), []).append(int(i))
-
     selected_indices = []
     suppressed = np.zeros(len(coords), dtype=bool)
     for idx_c in range(len(coords)):
         if suppressed[idx_c]:
             continue
         selected_indices.append(idx_c)
-        for nb in neighbors.get(idx_c, ()):
-            suppressed[nb] = True
+        suppressed[tree.query_ball_point(coords[idx_c], min_distance)] = True
     return coords[selected_indices]
 
 
@@ -537,6 +534,8 @@ class LatticeAssignment:
     reassigned_mask: np.ndarray
     low_confidence_mask: np.ndarray
     n_conflicts: int
+    neighbor_map: np.ndarray | None = None
+    topology_unresolved_mask: np.ndarray | None = None
 
 
 def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
@@ -569,12 +568,16 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
     b_vec = np.asarray(b_vec, dtype=np.float64)
     if origin.shape != (2,) or a_vec.shape != (2,) or b_vec.shape != (2,):
         raise ValueError("origin, a_vec and b_vec must have shape (2,)")
+    if not np.isfinite(origin).all():
+        raise ValueError("origin must be finite")
     if max_condition is None:
         validate_reference_lattice(a_vec, b_vec)
     else:
         validate_reference_lattice(a_vec, b_vec, max_condition=max_condition)
     matrix = np.column_stack((a_vec, b_vec))
     coords = (raw_points - origin) @ np.linalg.inv(matrix).T
+    if np.max(np.abs(coords), initial=0.) > 1e9:
+        raise AnalysisError("Lattice coordinates exceed the supported range.")
     naive = np.rint(coords).astype(int)
     n_points = len(raw_points)
     if n_points == 0:
@@ -586,7 +589,10 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
 
     n_conflicts = n_points - len({tuple(row) for row in naive})
     assigned = naive.copy()
-    if n_conflicts:
+    topology_labels, neighbor_map, unresolved = local_lattice_topology(raw_points, origin, matrix)
+    if len(np.unique(topology_labels, axis=0)) == n_points:
+        assigned = topology_labels
+    if len(np.unique(assigned, axis=0)) != n_points:
         matched = False
         for radius in range(1, max(1, int(max_search_radius)) + 1):
             offsets = np.array(
@@ -646,6 +652,8 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
         reassigned_mask=reassigned_mask,
         low_confidence_mask=low_confidence_mask,
         n_conflicts=n_conflicts,
+        neighbor_map=neighbor_map,
+        topology_unresolved_mask=unresolved,
     )
 
 
@@ -712,6 +720,7 @@ def _strain_fields_from_result(result, geometry, ideal_grid_display):
         'strain_geometry': geometry,
         'tri_edge_mask': None,
         'element_area': None,
+        'strain_valid_mask': np.asarray(result.quality_mask, bool).copy(),
     }
     if geometry == "triangles" and result.simplices is not None:
         fields['tri_edge_mask'] = result.edge_mask
@@ -725,69 +734,22 @@ def _strain_fields_from_result(result, geometry, ideal_grid_display):
 
 
 def _interpolate_strain_grids(fields, image_shape, grid_size=200):
-    """把逐元素应变插值到规则网格 (纯函数; 输入为字段字典)。
-
-    使用 Clough-Tocher C¹ 分片三次插值; 凸包外科学上无效, 保持 NaN,
-    绝不用最近邻值填色。返回 (strain_grid, strain_grid_gl, extent)。
-    """
-    centroids = fields['tri_centroids']
-    if centroids is None:
+    """共享线性插值：采样像素中心，保留无效位置和未测量区域的空洞。"""
+    from ppa_core.interpolation import interpolate_fields
+    if fields['tri_centroids'] is None:
         return {}, {}, None
-
     h, w = image_shape
-    # 工单74: 云图 extent 以像素边缘为界 (-0.5 ~ N-0.5)。底图 imshow 用默认
-    # extent, 像素中心在整数坐标、图像盒为 [-0.5, N-0.5]; 若云图盒取 (0, N-1),
-    # 不仅整体内缩半像素, N 个插值单元的中心还与网格节点
-    # linspace(0, N-1, grid_size) 最多错开半个网格(边缘处), 云图相对底图错位。
-    x_min, x_max = -0.5, w - 0.5
-    y_min, y_max = -0.5, h - 0.5
-    extent = (x_min, x_max, y_min, y_max)
-
-    gx = np.linspace(x_min, x_max, grid_size)
-    gy = np.linspace(y_min, y_max, grid_size)
-    GX, GY = np.meshgrid(gx, gy)
-    grid_points = np.column_stack((GX.ravel(), GY.ravel()))
-
-    def _ct_interp(values):
-        values = np.asarray(values, dtype=float)
-        valid = np.isfinite(values) & np.isfinite(centroids).all(axis=1)
-        valid_points = centroids[valid]
-        valid_values = values[valid]
-        if len(valid_points) < 3 or np.linalg.matrix_rank(valid_points - valid_points.mean(axis=0)) < 2:
-            return np.full((grid_size, grid_size), np.nan, dtype=float)
-        try:
-            interp = CloughTocher2DInterpolator(valid_points, valid_values)
-            return interp(grid_points).reshape(grid_size, grid_size)
-        except Exception:
-            # Linear fallback preserves the same convex-hull validity rule.
-            grid_vals = griddata(valid_points, valid_values, grid_points,
-                                 method='linear')
-            return grid_vals.reshape(grid_size, grid_size)
-
-    # 对每种应变分量插值 (剪切/旋转先转为显示坐标约定)
-    fields_map = {
-        'xx': fields['strain_xx'],
-        'yy': fields['strain_yy'],
-        'xy': strain_value_for_display('xy', fields['strain_xy']),
-        'eq': fields['strain_eq'],
-        'rot': strain_value_for_display('rot', fields['rotation']),
-    }
-    strain_grid = {}
-    for key, values in fields_map.items():
-        if values is not None:
-            strain_grid[key] = _ct_interp(values)
-
-    fields_gl = {
-        'gl_xx': fields['strain_gl_xx'],
-        'gl_yy': fields['strain_gl_yy'],
-        'gl_xy': strain_value_for_display('gl_xy', fields['strain_gl_xy']),
-        'gl_eq': fields['strain_gl_eq'],
-    }
-    strain_grid_gl = {}
-    for key, values in fields_gl.items():
-        if values is not None:
-            strain_grid_gl[key] = _ct_interp(values)
-    return strain_grid, strain_grid_gl, extent
+    extent = (-0.5, w-0.5, -0.5, h-0.5)
+    mapping = {'xx': 'strain_xx', 'yy': 'strain_yy', 'xy': 'strain_xy',
+               'eq': 'strain_eq', 'rot': 'rotation',
+               'gl_xx': 'strain_gl_xx', 'gl_yy': 'strain_gl_yy',
+               'gl_xy': 'strain_gl_xy', 'gl_eq': 'strain_gl_eq'}
+    values = {key: strain_value_for_display(key, fields[name])
+              for key, name in mapping.items() if fields.get(name) is not None}
+    grids = interpolate_fields(fields['tri_centroids'], values, extent, grid_size,
+                               fields.get('support_basis_display'))
+    return ({k: v for k, v in grids.items() if not k.startswith('gl_')},
+            {k: v for k, v in grids.items() if k.startswith('gl_')}, extent)
 
 
 # 应变云图 (插值视图) 的可选配色。发散型色图以对称色标渲染, 使 ±应变
@@ -859,7 +821,7 @@ class AtomMarkerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("原子级位移与应变分析工具 v3.4 – PPA · 应变张量")
+        self.root.title("原子级位移与应变分析工具 v3.4.1 – PPA · 应变张量")
         self.root.geometry("1500x900")
         self.root.minsize(1200, 700)
 
@@ -871,6 +833,9 @@ class AtomMarkerApp:
         self.image_path = None
         self.image_frame_index = None
         self.image_metadata = None
+        self.image_identity = None
+        self.analysis_provenance = None
+        self._closed = False
         self.points = []           # [(x, y), ...]  原子坐标
         self.undo_stack = []       # 撤销记录: [(操作, 数据), ...]
 
@@ -1009,6 +974,29 @@ class AtomMarkerApp:
 
         self.setup_ui()
         self._bind_shortcuts()
+        # Lifecycle events belong to this widget, not the Suite's active-tab
+        # shortcut dispatcher (which is removed before the host is destroyed).
+        tk.Misc.bind(self.root, '<Destroy>', self._on_destroy, add='+')
+        # Drain Tk's theme/layout idle work while this window is still alive.
+        self.root.update_idletasks()
+
+    def _on_destroy(self, event):
+        if event.widget != self.root or self._closed:
+            return
+        self._closed = True
+        self._job_generation += 1
+        if self._poll_after_id is not None:
+            self.root.after_cancel(self._poll_after_id)
+            self._poll_after_id = None
+        canvas = getattr(self, 'canvas', None)
+        if canvas is not None:
+            idle = getattr(canvas, '_idle_draw_id', None)
+            if idle is not None:
+                try:
+                    canvas.get_tk_widget().after_cancel(idle)
+                except tk.TclError:
+                    self.root.tk.call('after', 'cancel', idle)
+                canvas._idle_draw_id = None
 
     # ================================================================
     #  样式配置
@@ -1136,7 +1124,7 @@ class AtomMarkerApp:
         tk.Label(header_frame, text="⚛  原子位移与应变分析工具 (PPA)",
                  bg='#1a237e', fg='white', font=('Microsoft YaHei UI', 12, 'bold'),
                  anchor='w', padx=12).pack(side=tk.LEFT, fill=tk.Y)
-        tk.Label(header_frame, text="v3.4  |  Peak Pairs Analysis · 全点位移 · 应变张量",
+        tk.Label(header_frame, text="v3.4.1  |  Peak Pairs Analysis · 全点位移 · 应变张量",
                  bg='#1a237e', fg='#90caf9', font=('Microsoft YaHei UI', 8),
                  anchor='e', padx=12).pack(side=tk.RIGHT, fill=tk.Y)
 
@@ -1464,7 +1452,9 @@ class AtomMarkerApp:
         """
         if use_preprocessed is None:
             use_preprocessed = self.use_preprocessed.get()
-        if use_preprocessed and self.processed_image is not None:
+        if use_preprocessed:
+            if self.processed_image is None:
+                raise AnalysisError("预处理图尚未生成，请先应用预处理。")
             return self.processed_image
         return self.image
 
@@ -1491,6 +1481,9 @@ class AtomMarkerApp:
         self.root.update_idletasks()
 
         try:
+            validated = validate_project_data({'preprocess': {
+                'method': method, 'params': self.preprocess_params}})
+            self.preprocess_params = validated['preprocess']['params']
             if method == "gaussian":
                 result = self._apply_gaussian(self.image)
             elif method == "median":
@@ -2530,6 +2523,7 @@ class AtomMarkerApp:
                 y_min, y_max = min(y0, y1), max(y0, y1)
                 if x_max - x_min > 3 and y_max - y_min > 3:
                     self.ref_region = (x_min, y_min, x_max, y_max)
+                    self._clear_analysis_results()
                     n_in = self._count_atoms_in_ref_region()
                     self._update_ref_region_label()
                     color = '#006600' if n_in >= 10 else '#cc6600'
@@ -2701,6 +2695,7 @@ class AtomMarkerApp:
     def _clear_ref_region(self):
         """Clear the 2-D refinement region and retain the currently set vectors."""
         self.ref_region = None
+        self._clear_analysis_results()
         self._ref_region_mode_active = False
         self._drawing_ref_region = None
         self._cleanup_ref_region_preview()
@@ -3172,10 +3167,10 @@ class AtomMarkerApp:
                 dlg.focus_set()
                 return
             try:
-                a_len = float(a_len_var.get())
-                a_ang = float(a_ang_var.get())
-                b_len = float(b_len_var.get())
-                b_ang = float(b_ang_var.get())
+                a_len = finite_number(a_len_var.get(), "a 长度", minimum=1e-9, maximum=1e6)
+                a_ang = finite_number(a_ang_var.get(), "a 角度", minimum=-360., maximum=360.)
+                b_len = finite_number(b_len_var.get(), "b 长度", minimum=1e-9, maximum=1e6)
+                b_ang = finite_number(b_ang_var.get(), "b 角度", minimum=-360., maximum=360.)
                 if a_len <= 0 or b_len <= 0:
                     raise ValueError
             except ValueError:
@@ -3518,6 +3513,21 @@ class AtomMarkerApp:
                                   if getattr(self, 'ref_region', None) is not None else None),
         }
 
+    def _result_metadata(self):
+        """Export the producing calculation's provenance, never relabel it."""
+        provenance = getattr(self, 'analysis_provenance', None)
+        if provenance is not None:
+            return copy.deepcopy(provenance)
+        # Compatibility for API clients constructing result arrays directly.
+        return {
+            'algorithm_id': LOCAL_PPA_ALGORITHM_ID if self.analysis_method == 'peak_pairs' else 'lattice-cst-legacy',
+            'equivalent_strain_coefficient': getattr(self, 'von_mises_coeff', 4./9.),
+            'image_identity': getattr(self, 'image_identity', None),
+            'image_path': self.image_path,
+            'image_frame_index': self.image_frame_index,
+            'reference_lattice': self._reference_lattice_metadata(),
+        }
+
     # ================================================================
     #  后台任务: queue + root.after (线程中禁止直接操作 Tk)
     # ================================================================
@@ -3526,6 +3536,8 @@ class AtomMarkerApp:
             self._schedule_worker_poll()
 
     def _schedule_worker_poll(self):
+        if getattr(self, '_closed', False):
+            return
         try:
             self._poll_after_id = self.root.after(50, self._poll_worker_queue)
         except tk.TclError:
@@ -3533,6 +3545,8 @@ class AtomMarkerApp:
 
     def _poll_worker_queue(self):
         self._poll_after_id = None
+        if getattr(self, '_closed', False):
+            return
         try:
             while True:
                 kind, generation, payload = self._worker_queue.get_nowait()
@@ -3661,7 +3675,7 @@ class AtomMarkerApp:
                 md = float(min_dist_var.get())
                 sg = float(sigma_var.get())
                 ww = int(window_var.get())
-                if md <= 0 or sg < 0 or ww < 3 or ww % 2 == 0:
+                if not np.isfinite(md) or not np.isfinite(sg) or not 0 < md <= 1e6 or not 0 <= sg <= 50 or not 3 <= ww <= 101 or ww % 2 == 0:
                     raise ValueError
             except ValueError:
                 messagebox.showerror("参数错误",
@@ -3697,6 +3711,18 @@ class AtomMarkerApp:
         All Tk calls happen either here (before the thread starts) or in
         ``_finish_auto_detect`` (after the result is polled via ``root.after``).
         """
+        try:
+            params = validate_project_data({'detect_params': {
+                'min_dist': min_distance, 'sigma': sigma, 'window': window,
+                'method': self.centroid_method}})['detect_params']
+            min_distance, sigma, window = params['min_dist'], params['sigma'], params['window']
+            if threshold is not None:
+                threshold = parse_detection_threshold(str(threshold))
+            use_preprocessed = bool(self.use_preprocessed.get())
+            image_snapshot = self._get_work_image(use_preprocessed).copy()
+        except (ValueError, AttributeError) as error:
+            messagebox.showerror('检测参数错误', str(error))
+            return
         self.detect_min_dist = min_distance
         self.detect_sigma = sigma
         self.detect_window = window
@@ -3707,7 +3733,13 @@ class AtomMarkerApp:
         self._ensure_worker_polling()
         # 工单75: 在主线程把 tk.BooleanVar 快照成普通 bool 传入 worker,
         # worker 内不得再读 tkinter 变量 (Tk 非线程安全)。
-        use_preprocessed = bool(self.use_preprocessed.get())
+        detection_snapshot = {
+            'image': image_snapshot,
+            'roi': None if self.detect_roi is None else tuple(self.detect_roi),
+            'polygon': None if self.detect_polygon is None else tuple(tuple(p) for p in self.detect_polygon),
+            'method': str(self.centroid_method),
+            'cancelled': lambda: generation != self._job_generation or getattr(self, '_closed', False),
+        }
 
         def _run():
             try:
@@ -3715,7 +3747,7 @@ class AtomMarkerApp:
                     return
                 new_points, gaussian_fallback_stats = self._detect_peaks_worker(
                     min_distance, sigma, window, threshold, bright,
-                    use_preprocessed)
+                    use_preprocessed, snapshot=detection_snapshot)
                 self._worker_queue.put(
                     ('detect_done', generation,
                      (new_points, gaussian_fallback_stats)))
@@ -3755,8 +3787,10 @@ class AtomMarkerApp:
             self.status.config(text=f"已丢弃本次检测结果 ({len(new_points)} 个点)")
             return
         if choice:
+            self._record_undo('replace', list(self.points))
             self.points.extend(new_points)
         else:
+            self._record_undo('replace', list(self.points))
             self.points = new_points
         self.selected_point_idx = None
         self.ref_select_indices = []  # 替换点表后旧索引会错位
@@ -3767,18 +3801,25 @@ class AtomMarkerApp:
                                 f"{fallback_note.strip()}")
 
     def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright,
-                             use_preprocessed):
+                             use_preprocessed, *, snapshot=None):
         # 工单75: use_preprocessed 必填(无默认值), 强制调用方在主线程快照后传入,
         # worker 内经 None 分支现场读 tk 变量会在编译期签名层面就不再可能。
-        img = self._get_work_image(use_preprocessed).copy()
+        snapshot = snapshot or {
+            'image': self._get_work_image(use_preprocessed).copy(),
+            'roi': self.detect_roi, 'polygon': self.detect_polygon,
+            'method': self.centroid_method, 'cancelled': lambda: False,
+        }
+        img = snapshot['image'].copy()
+        method = snapshot['method']
         h_img, w_img = img.shape
 
         # 记住检测 ROI 边界，后续做后过滤（不要用 -inf 污染图像）
         roi_bounds = None
-        if self.detect_roi is not None:
+        if snapshot['roi'] is not None:
+            roi = snapshot['roi']
             roi_bounds = (
-                max(0, int(self.detect_roi[0])), max(0, int(self.detect_roi[1])),
-                min(w_img, int(self.detect_roi[2])), min(h_img, int(self.detect_roi[3])),
+                max(0, int(roi[0])), max(0, int(roi[1])),
+                min(w_img, int(roi[2])), min(h_img, int(roi[3])),
             )
 
         if not bright:
@@ -3820,9 +3861,9 @@ class AtomMarkerApp:
                           (coords[:, 0] >= ry0) & (coords[:, 0] < ry1))
 
         # 多边形选区预过滤（先过滤 coords，NMS 只处理选区内点）
-        if self.detect_polygon is not None:
+        if snapshot['polygon'] is not None:
             from matplotlib.path import Path
-            pverts = np.array(self.detect_polygon)
+            pverts = np.array(snapshot['polygon'])
             pcodes = [Path.MOVETO] + [Path.LINETO] * (len(pverts) - 1) + [Path.CLOSEPOLY]
             poly_path = Path(np.vstack([pverts, pverts[0:1]]), codes=pcodes)
             in_poly = poly_path.contains_points(coords[:, [1, 0]])
@@ -3847,7 +3888,7 @@ class AtomMarkerApp:
 
         # 6) 亚像素质心修正 ⭐
         gaussian_fallback_stats = None
-        if self.centroid_method == "com" and len(selected) > 20:
+        if method == "com":
             # COM 批量矢量化: N>20 时比逐原子调用快 10-50×
             cx_arr, cy_arr = self._refine_centroids_batch(img, selected, window=window)
             new_points = [(float(cx_arr[i]), float(cy_arr[i]))
@@ -3855,14 +3896,18 @@ class AtomMarkerApp:
         else:
             # 少数 COM 或高斯拟合: 保留逐原子精修
             # 工单27: 高斯拟合失败的点会静默回退 COM, 必须计数并提示
-            self._gaussian_fallback_count = 0
+            n_fallback = 0
             new_points = []
             for i, c in enumerate(selected):
-                cx, cy = self._refine_centroid(img, c[1], c[0], window=window,
-                                               point_index=i + 1)
+                if snapshot['cancelled']():
+                    return [], None
+                cx, cy, fitted = gaussian_refine_point(img, c[1], c[0], window)
+                if not fitted:
+                    bx, by = self._refine_centroids_batch(img, np.array([c]), window=window)
+                    cx, cy = bx[0], by[0]
+                    n_fallback += 1
                 new_points.append((cx, cy))
-            if self.centroid_method == "gaussian":
-                n_fallback = self._gaussian_fallback_count
+            if method == "gaussian":
                 if n_fallback:
                     logger.warning(
                         "高斯精炼: %d/%d 个点高斯拟合失败，已回退 COM 亚像素质心",
@@ -3895,46 +3940,8 @@ class AtomMarkerApp:
                 "第 %s 个点高斯拟合失败，已回退 COM 亚像素质心",
                 point_index if point_index is not None else "?")
 
-        # COM: 迭代 2 次, 每次以前次质心重新居中窗口, 消除窗口偏心偏差
-        hw = window // 2
-        H, W = image.shape
-        cx_f, cy_f = float(x), float(y)
-        for _ in range(2):
-            xi = int(np.clip(round(cx_f), 0, W - 1))
-            yi = int(np.clip(round(cy_f), 0, H - 1))
-            y0 = max(0, yi - hw)
-            y1 = min(H, yi + hw + 1)
-            x0 = max(0, xi - hw)
-            x1 = min(W, xi + hw + 1)
-
-            # 如果靠边，调整窗口使其居中
-            if y1 - y0 < window:
-                if y0 == 0:
-                    y1 = min(H, window)
-                else:
-                    y0 = max(0, H - window)
-            if x1 - x0 < window:
-                if x0 == 0:
-                    x1 = min(W, window)
-                else:
-                    x0 = max(0, W - window)
-
-            roi = image[y0:y1, x0:x1].copy()
-            if roi.size == 0:
-                return float(x), float(y)
-
-            # 减去局部背景（取 5% 分位数）
-            bg = np.percentile(roi, 5)
-            roi = np.maximum(roi - bg, 0)
-
-            total = roi.sum()
-            if total == 0:
-                return float(x), float(y)
-            ys, xs = np.mgrid[0:roi.shape[0], 0:roi.shape[1]]
-            cx_f = x0 + (xs * roi).sum() / total
-            cy_f = y0 + (ys * roi).sum() / total
-
-        return cx_f, cy_f
+        cx, cy = self._refine_centroids_batch(image, np.array([[round(y), round(x)]]), window=window)
+        return float(cx[0]), float(cy[0])
 
     def _gaussian_fit_window(self, image, x, y, window):
         """
@@ -3950,7 +3957,7 @@ class AtomMarkerApp:
         cx, cy, fitted = gaussian_refine_point(image, x, y, window)
         return (cx, cy) if fitted else None
 
-    def _refine_centroids_batch(self, image, coords_rc, window=5, iterations=2):
+    def _refine_centroids_batch(self, image, coords_rc, window=5, iterations=2, _padded=None):
         """
         批量 COM 亚像素定位（预填充矢量化版, 迭代收敛）
 
@@ -3975,9 +3982,14 @@ class AtomMarkerApp:
         N = len(coords_rc)
         if N == 0:
             return np.empty((0,), dtype=np.float64), np.empty((0,), dtype=np.float64)
+        chunk = max(1, (16*1024*1024)//(window*window*8*3))
+        padded = np.pad(image, hw, mode='reflect') if _padded is None else _padded
+        if N > chunk:
+            results = [self._refine_centroids_batch(image, coords_rc[i:i+chunk], window, iterations, padded)
+                       for i in range(0, N, chunk)]
+            return np.concatenate([r[0] for r in results]), np.concatenate([r[1] for r in results])
 
         # 预填充图像，坐标统一偏移 hw
-        padded = np.pad(image, hw, mode='reflect')
 
         # 预生成窗口内的网格坐标（仅一次）
         ys_grid, xs_grid = np.mgrid[0:window, 0:window]
@@ -4012,7 +4024,7 @@ class AtomMarkerApp:
             centers_r = np.clip(np.round(new_y).astype(int), 0, H - 1)
             results_x, results_y = new_x, new_y
 
-        return results_x, results_y
+        return np.clip(results_x, 0., W-1.), np.clip(results_y, 0., H-1.)
 
     def _show_detect_params(self):
         """快速查看/修改检测参数"""
@@ -4028,7 +4040,10 @@ class AtomMarkerApp:
     def _on_analysis_method_changed(self, event=None):
         """Keep the selected algorithm explicit in the result metadata and UI."""
         selected = self.analysis_method_var.get() if hasattr(self, 'analysis_method_var') else ""
-        self.analysis_method = "lattice_cst" if selected.startswith("兼容") else "peak_pairs"
+        method = "lattice_cst" if selected.startswith("兼容") else "peak_pairs"
+        if method != self.analysis_method:
+            self._clear_analysis_results()
+        self.analysis_method = method
 
     def _reset_after_image_load(self):
         """Reset image-dependent state without creating an undo record for old points."""
@@ -4068,9 +4083,9 @@ class AtomMarkerApp:
         self.btn_toggle_display.config(text="👁 显示: 原始")
         self.preprocess_status.config(text="状态: 未应用预处理", foreground="gray")
 
-    def _load_image_path(self, path, frame_index=None):
+    def _load_image_path(self, path, frame_index=None, *, loaded=None):
         """Load one image frame and make it the only valid state for the application."""
-        loaded = load_analysis_image(path, frame_index=frame_index)
+        loaded = loaded or load_analysis_image(path, frame_index=frame_index)
         self.image = loaded.pixels
         self.image_path = loaded.source_path
         self.image_frame_index = loaded.frame_index
@@ -4079,6 +4094,7 @@ class AtomMarkerApp:
             'source_dtype': loaded.source_dtype,
             'frame_count': loaded.frame_count,
         }
+        self.image_identity = loaded.identity
         self._reset_after_image_load()
         self.display_image()
 
@@ -4222,7 +4238,25 @@ class AtomMarkerApp:
             # 与参考晶格校验、索引分配共用同一阈值快照：worker 里不得再读实例
             # 状态，也不得回落到隐藏默认 30，否则用户放宽的阈值会被静默挡下。
             lattice_max_condition=float(lattice_max_condition),
+            neighbor_map=assignment.neighbor_map.copy(),
+            unresolved_mask=assignment.topology_unresolved_mask.copy(),
+            provenance={
+                'algorithm_id': LOCAL_PPA_ALGORITHM_ID if self.analysis_method == 'peak_pairs' else 'lattice-cst-legacy',
+                'equivalent_strain_coefficient': float(self.von_mises_coeff),
+                'lattice_max_condition': float(lattice_max_condition),
+                'image_identity': getattr(self, 'image_identity', None),
+                'image_path': getattr(self, 'image_path', None),
+                'image_frame_index': getattr(self, 'image_frame_index', None),
+                'reference_lattice': {
+                    'coordinate_space': 'image-display-x-right-y-down',
+                    'origin': r_origin.tolist(), 'a_vec': r_a.tolist(), 'b_vec': r_b.tolist(),
+                    'refinement_applied': refine_applied, 'refinement_atom_count': n_ref_used,
+                    'refinement_region': list(self.ref_region) if getattr(self, 'ref_region', None) is not None else None,
+                    'estimation': getattr(self, 'reference_metadata', None),
+                },
+            },
         )
+        self.analysis_provenance = copy.deepcopy(payload_args['provenance'])
 
         def _run():
             try:
@@ -4237,7 +4271,8 @@ class AtomMarkerApp:
                              refine_applied, da_pct, db_pct, n_ref_used, n_bad,
                              n_conflicts, n_reassigned, von_mises_coeff,
                              analysis_method, image_shape,
-                             lattice_max_condition=None):
+                             lattice_max_condition=None, neighbor_map=None,
+                             unresolved_mask=None, provenance=None):
         """Heavy, Tk-free half of ``run_ppa_analysis``.
 
         只读传入参数, 不读写可变实例状态; 全部结果放入 queue payload, 由
@@ -4276,6 +4311,10 @@ class AtomMarkerApp:
                     # 硬编码 30，用户按 LATTICE_CONDITION_GUIDANCE 放宽参考晶格
                     # 阈值后，局部路径仍按 30 拒绝且无提示。
                     local_kwargs["max_condition"] = lattice_max_condition
+                if neighbor_map is not None:
+                    local_kwargs.update(neighbor_map=neighbor_map,
+                                        reference_basis=np.column_stack((r_a, r_b))*np.array([[1.], [-1.]]),
+                                        unresolved_mask=unresolved_mask)
                 result = compute_local_peak_pair_strain(
                     lattice_indices,
                     matched_ideal * np.array([1.0, -1.0]),
@@ -4290,6 +4329,7 @@ class AtomMarkerApp:
                     pts * np.array([1.0, -1.0]),
                     equivalent_coefficient=von_mises_coeff)
                 strain_fields = _strain_fields_from_result(result, "triangles", matched_ideal)
+            strain_fields['support_basis_display'] = np.column_stack((r_a, r_b))
         except AnalysisError as error:
             # 应变失败不致命, 仍显示畸变染色图与跳过说明。
             strain_fields = None
@@ -4303,7 +4343,7 @@ class AtomMarkerApp:
         if strain_fields is not None:
             strain_grids, strain_grids_gl, grid_extent = _interpolate_strain_grids(
                 strain_fields, image_shape)
-            grid_ok = bool(strain_grids)
+            grid_ok = any(np.isfinite(grid).any() for grid in strain_grids.values())
             if _cancelled():
                 return
 
@@ -4319,7 +4359,7 @@ class AtomMarkerApp:
                 n_bad=n_bad,
                 n_conflicts=n_conflicts,
                 n_reassigned=n_reassigned,
-                strain_ok=strain_fields is not None,
+                strain_ok=strain_fields is not None and bool(strain_fields['strain_valid_mask'].any()),
                 grid_ok=grid_ok,
                 strain_error=strain_error,
                 refine_applied=refine_applied,
@@ -4331,6 +4371,7 @@ class AtomMarkerApp:
                 strain_grids_gl=strain_grids_gl,
                 grid_extent=grid_extent,
                 invalid_sites=invalid_sites,
+                provenance=provenance,
             ),
         ))
 
@@ -4338,6 +4379,7 @@ class AtomMarkerApp:
         """Apply results and show one consolidated, non-blocking quality report."""
         # ---- 结果字段的唯一写入点 (Tk 主线程): worker 只发 payload ----
         fields = payload.get('strain_fields')
+        self.analysis_provenance = payload.get('provenance')
         if fields is not None:
             self.result_locations_physical = fields['result_locations_physical']
             self.tri_centroids = fields['tri_centroids']
@@ -4352,6 +4394,7 @@ class AtomMarkerApp:
             self.strain_gl_eq = fields['strain_gl_eq']
             self.strain_quality_grades = fields['strain_quality_grades']
             self.strain_invalid_reasons = fields['strain_invalid_reasons']
+            self.strain_valid_mask = fields['strain_valid_mask']
             self.strain_geometry = fields['strain_geometry']
             self.tri_edge_mask = fields['tri_edge_mask']
             self.element_area = fields['element_area']
@@ -4384,7 +4427,7 @@ class AtomMarkerApp:
         n_elements = int(np.isfinite(self.strain_xx).sum()) if self.strain_xx is not None else 0
         element_label = "原子位点" if self.strain_geometry == "sites" else "有效三角形"
         strain_info = ""
-        if strain_ok:
+        if strain_ok and n_elements:
             finite_xx = self.strain_xx[np.isfinite(self.strain_xx)]
             strain_info = (f"  |  {n_elements} 个{element_label}  "
                            f"ε_xx ∈ [{finite_xx.min():.4f}, {finite_xx.max():.4f}]")
@@ -4864,6 +4907,8 @@ class AtomMarkerApp:
         # 使任何在飞的后台任务代际失效: 点表/参考/图像变化后, 旧结果不得
         # 再写回实例状态 (与 worker "只发 payload、由主线程写入" 配合闭环)。
         self._job_generation += 1
+        self.analysis_provenance = None
+        self.strain_valid_mask = None
         self.ideal_grid = None
         self.matched_actual = None
         self.displacements = None
@@ -4906,6 +4951,8 @@ class AtomMarkerApp:
         reply = messagebox.askyesno("确认重置", "将清除图像、所有标记点和分析结果，\n恢复到刚打开程序的状态。\n\n确认重置？")
         if not reply:
             return
+        self._clear_analysis_results()
+        self.image_identity = None
         self.image = None
         self.image_path = None
         self.image_frame_index = None
@@ -5113,7 +5160,7 @@ class AtomMarkerApp:
             idx, (x, y) = data
             self.points.insert(idx, (x, y))
             self.status.config(text=f"已恢复点 {idx+1} ({x:.0f},{y:.0f})")
-        elif action == "clear":
+        elif action in ("clear", "replace"):
             # 撤销"清除": 恢复所有被清除的点
             self.points = data
             self.status.config(text=f"已恢复 {len(data)} 个被清除的点")
@@ -5132,7 +5179,10 @@ class AtomMarkerApp:
     def _update_vm_coeff(self):
         """von Mises 系数更新回调"""
         try:
-            self.von_mises_coeff = float(self.vm_var.get())
+            value = finite_number(self.vm_var.get(), '等效应变系数', minimum=1e-12, maximum=1e6)
+            if value != self.von_mises_coeff:
+                self._clear_analysis_results()
+            self.von_mises_coeff = value
         except ValueError:
             pass  # 忽略非法输入，保持旧值
 
@@ -5167,8 +5217,8 @@ class AtomMarkerApp:
                 'reassigned': np.asarray(self.assignment_reassigned_mask, dtype=bool).tolist() if getattr(self, 'assignment_reassigned_mask', None) is not None else None,
                 'low_confidence': np.asarray(self.assignment_low_confidence_mask, dtype=bool).tolist() if getattr(self, 'assignment_low_confidence_mask', None) is not None else None,
                 'initial_conflict_count': int(getattr(self, 'assignment_conflict_count', 0)),
-                'strain_quality': np.asarray(self.strain_quality_grades, dtype=str).tolist() if getattr(self, 'strain_quality_grades', None) is not None else None,
-                'strain_invalid_reasons': np.asarray(self.strain_invalid_reasons, dtype=str).tolist() if getattr(self, 'strain_invalid_reasons', None) is not None else None,
+                'strain_quality': np.asarray(self.strain_quality_grades, dtype=str).tolist() if getattr(self, 'strain_geometry', 'sites') == 'sites' and getattr(self, 'strain_quality_grades', None) is not None else None,
+                'strain_invalid_reasons': np.asarray(self.strain_invalid_reasons, dtype=str).tolist() if getattr(self, 'strain_geometry', 'sites') == 'sites' and getattr(self, 'strain_invalid_reasons', None) is not None else None,
             }
         payload = {
             'points': [[float(x), float(y)] for x, y in self.points],
@@ -5192,13 +5242,16 @@ class AtomMarkerApp:
             'analysis': {
                 'algorithm_id': algorithm_id,
                 'equivalent_strain_coefficient': self.von_mises_coeff,
+                'lattice_max_condition': self.lattice_max_condition,
                 'outlier_indices': np.flatnonzero(self.outlier_mask).tolist() if self.outlier_mask is not None else [],
                 'lattice_assignment': assignment_payload,
+                'provenance': getattr(self, 'analysis_provenance', None),
             },
             'colorbar': {'manual': self.colorbar_manual, 'vmin': self.colorbar_vmin.get(), 'vmax': self.colorbar_vmax.get()},
         }
         try:
-            save_versioned_project(file, payload, self.image_path, frame_index=self.image_frame_index)
+            save_versioned_project(file, payload, self.image_path, frame_index=self.image_frame_index,
+                                   expected_identity=getattr(self, 'image_identity', None))
         except Exception as error:
             messagebox.showerror("保存失败", f"无法保存项目：\n{error}")
             return
@@ -5287,10 +5340,14 @@ class AtomMarkerApp:
             image_path = image['path']
             frame_index = image.get('frame_index')
         try:
-            self._load_image_path(image_path, frame_index=frame_index)
-        except ImageLoadError as error:
+            loaded = load_analysis_image(image_path, frame_index=frame_index,
+                                         expected_identity=None if data.get('legacy_unverified') else data['image'])
+            data = validate_project_data(data, image_shape=loaded.pixels.shape)
+        except (ImageLoadError, ProjectValidationError, ValueError, TypeError) as error:
             messagebox.showerror("加载已阻止", f"图像无法加载；不会恢复坐标：\n{error}")
             return
+        self._load_image_path(image_path, frame_index=frame_index, loaded=loaded)
+        self.lattice_max_condition = data['analysis']['lattice_max_condition']
 
         points = [(float(x), float(y)) for x, y in data.get('points', [])]
         height, width = self.image.shape
@@ -5377,7 +5434,7 @@ class AtomMarkerApp:
         self._update_ref_region_label()
         analysis = data.get('analysis', {})
         self.von_mises_coeff = float(analysis.get('equivalent_strain_coefficient', data.get('von_mises_coeff', 4.0 / 9.0)))
-        self.vm_var.set(f"{self.von_mises_coeff:.4f}")
+        self.vm_var.set(repr(self.von_mises_coeff))
         algorithm_id = analysis.get('algorithm_id', '')
         if algorithm_id == 'lattice-cst-legacy':
             self.analysis_method = 'lattice_cst'
@@ -5459,14 +5516,21 @@ class AtomMarkerApp:
             return
         # utf-8-sig 带 BOM: 中文表头在 Excel (中文 Windows 默认 GBK) 下不乱码;
         # ppa_stats 的加载器同样按 utf-8-sig 读取, 双向兼容。
+        pending = None
         try:
-            with open(file, 'w', newline='', encoding='utf-8-sig') as f:
+            pending = CsvExport(file)
+            with open(pending.csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 writer.writerow(["编号", "x", "y"])
                 for i, (x, y) in enumerate(self.points):
                     writer.writerow([i + 1, f"{x:.4f}", f"{y:.4f}"])
-        except OSError as error:
-            messagebox.showerror("导出失败", f"无法写入文件 (路径/权限?)：\n{error}")
+            pending.commit({'data_type': 'atoms', 'coordinate_convention': 'image-display-x-right-y-down',
+                            'image_identity': getattr(self, 'image_identity', None),
+                            'row_count': len(self.points)})
+        except (OSError, ValueError) as error:
+            if pending is not None:
+                pending.abort()
+            messagebox.showerror('导出失败', f'CSV/元数据未完整提交：\n{error}')
             return
         self.status.config(text=f"✓ 坐标已保存: {os.path.basename(file)}")
 
@@ -5541,6 +5605,7 @@ class AtomMarkerApp:
             self.fig.savefig(file, dpi=300, bbox_inches='tight', pad_inches=0)
         except OSError as error:
             messagebox.showerror("导出失败", f"无法写入文件 (路径/权限?)：\n{error}")
+            return
         finally:
             self.ax.set_title(old_title)
         self.status.config(text=f"✓ 视图已保存: {os.path.basename(file)}")
@@ -5572,8 +5637,10 @@ class AtomMarkerApp:
                       if self.assignment_reassigned_mask is not None else np.zeros(n_row, dtype=bool))
         low_confidence = (np.asarray(self.assignment_low_confidence_mask, dtype=bool)
                           if self.assignment_low_confidence_mask is not None else np.zeros(n_row, dtype=bool))
+        pending = None
         try:
-            with open(file, 'w', newline='', encoding='utf-8-sig') as f:
+            pending = CsvExport(file)
+            with open(pending.csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 writer.writerow(["编号", "实际x（物理）", "实际y（物理）", "参考x（物理）", "参考y（物理）",
                                  "位移dx（物理）", "位移dy（物理）", "位移幅值",
@@ -5592,15 +5659,14 @@ class AtomMarkerApp:
                                      f"{residuals[i]:.6f}", f"{residuals_px[i]:.6f}",
                                      int(reassigned[i]), int(low_confidence[i])])
         except OSError as error:
+            if pending is not None:
+                pending.abort()
             messagebox.showerror("导出失败", f"无法写入文件 (路径/权限?)：\n{error}")
             return
         # 位移 CSV 同样写约定 sidecar: ppa_stats 否则只能靠 y<0 启发式猜测
         # 物理约定, 原点选在视场中部时 (y 有正有负) 会猜错并翻转 ε_xy/θ 符号
-        metadata_path = os.path.splitext(file)[0] + ".metadata.json"
         try:
-            import json
-            with open(metadata_path, 'w', encoding='utf-8') as meta_file:
-                json.dump({
+            pending.commit({
                     'data_type': 'displacement',
                     'coordinate_convention': 'physical-cartesian-x-right-y-up; image-display-y-down',
                     'algorithm_id': LOCAL_PPA_ALGORITHM_ID if self.analysis_method == 'peak_pairs' else 'lattice-cst-legacy',
@@ -5613,9 +5679,12 @@ class AtomMarkerApp:
                         '索引重分配': '1=由全局一对一匹配调整索引; 0=保留初始取整索引',
                         '低置信度': '1=匹配残差较大但仍保留; 0=正常',
                     },
-                }, meta_file, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+                    **self._result_metadata(),
+                })
+        except (OSError, ValueError) as error:
+            pending.abort()
+            messagebox.showerror("导出失败", f"CSV/元数据未完整提交：\n{error}")
+            return
         self.status.config(text=f"✓ 位移数据已保存: {os.path.basename(file)}")
 
     def save_strain_csv(self):
@@ -5636,8 +5705,10 @@ class AtomMarkerApp:
 
         element_label = "原子位点" if self.strain_geometry == "sites" else "三角形"
         export_locations = self.result_locations_physical if self.result_locations_physical is not None else self.tri_centroids
+        pending = None
         try:
-            with open(file, 'w', newline='', encoding='utf-8-sig') as f:
+            pending = CsvExport(file)
+            with open(pending.csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 header = [f"{element_label}编号", "位置x", "位置y",
                           "ε_xx", "ε_yy", "ε_xy (张量剪应变)", "ε_eq (von Mises)", "极分解旋转 θ (rad)"]
@@ -5649,6 +5720,8 @@ class AtomMarkerApp:
                     header += ["参考三角形面积"]
                 if is_site_result:
                     header += ["原始点编号", "晶格n", "晶格m", "应变有效", "计算质量", "无效原因"]
+                else:
+                    header += ["应变有效", "无效原因"]
                 writer.writerow(header)
 
                 for t in range(len(self.tri_centroids)):
@@ -5678,15 +5751,17 @@ class AtomMarkerApp:
                                   if self.strain_invalid_reasons is not None else "")
                         row += [t + 1, int(lattice_n), int(lattice_m),
                                 int(np.isfinite(self.strain_xx[t])), quality, reason]
+                    else:
+                        reason = str(self.strain_invalid_reasons[t]) if self.strain_invalid_reasons is not None else ''
+                        row += [int(np.isfinite(self.strain_xx[t])), reason]
                     writer.writerow(row)
         except OSError as error:
+            if pending is not None:
+                pending.abort()
             messagebox.showerror("导出失败", f"无法写入文件 (路径/权限?)：\n{error}")
             return
-        metadata_path = os.path.splitext(file)[0] + ".metadata.json"
         try:
-            import json
-            with open(metadata_path, 'w', encoding='utf-8') as meta_file:
-                json.dump({
+            pending.commit({
                     'algorithm_id': LOCAL_PPA_ALGORITHM_ID if self.analysis_method == 'peak_pairs' else 'lattice-cst-legacy',
                     'element_geometry': self.strain_geometry,
                     'coordinate_convention': 'physical-cartesian-x-right-y-up; image-display-y-down',
@@ -5703,9 +5778,12 @@ class AtomMarkerApp:
                         'C-minimal-fit': '两个非共线邻居的最小拟合',
                         'invalid': '几何不足，应变为 NaN，位移仍有效',
                     } if is_site_result else None,
-                }, meta_file, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+                    **self._result_metadata(),
+                })
+        except (OSError, ValueError) as error:
+            pending.abort()
+            messagebox.showerror("导出失败", f"CSV/元数据未完整提交：\n{error}")
+            return
         self.status.config(text=f"✓ 应变数据已保存: {os.path.basename(file)}  ({len(self.tri_centroids)} 个{element_label})")
 
 

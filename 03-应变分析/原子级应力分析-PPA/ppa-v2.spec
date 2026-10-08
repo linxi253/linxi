@@ -90,7 +90,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='PPA原子级位移应变分析工具v3.4',
+    name='PPA原子级位移应变分析工具v3.4.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
