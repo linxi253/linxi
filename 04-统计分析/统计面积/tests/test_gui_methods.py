@@ -10,7 +10,8 @@
   ``AttributeError``，并且不污染当前项目状态。
 
 说明（后端与 CI）：被测模块在 import 时按工具自身约定执行
-``matplotlib.use('TkAgg')``；本文件随后显式切到 ``Agg``，因为测试只创建
+``matplotlib.use('TkAgg')``，这会覆盖本文件模块级设置的 ``Agg``。因此
+``tool`` fixture 在**加载被测模块之后**再显式切回 ``Agg``，确保测试只创建
 figure 对象、不创建 Tk 窗口。Windows CI 的 runner 有桌面会话，TkAgg 本身
 也能加载；这里的 Agg 是为了让断言不依赖窗口系统，而不是"无显示 CI 必需"。
 """
@@ -46,7 +47,15 @@ def _load_tool_module():
 
 @pytest.fixture(scope="module")
 def tool():
-    return _load_tool_module()
+    module = _load_tool_module()
+    # 被测模块在 **import 时** 会执行 matplotlib.use('TkAgg')，把本文件模块级设置的
+    # Agg 覆盖掉；因此必须在**加载之后**再切回 Agg。否则后续 plt.figure() 会走 TkAgg
+    # 去创建真实 Tk 窗口（CI 上表现为第三个方法处 Tk 初始化失败）。
+    # 这里只决定测试进程用哪个后端，不改变被测模块自身的后端约定。
+    matplotlib.use("Agg")
+    backend = matplotlib.get_backend().lower()
+    assert backend == "agg", f"加载被测模块后必须回到 Agg，实际为 {backend!r}"
+    return module
 
 
 def _bare_viewer(tool, **attrs):
