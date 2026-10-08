@@ -1191,3 +1191,43 @@ def test_registry_falls_back_to_pythonproject_layout(tmp_path, monkeypatch):
     finally:
         monkeypatch.delenv("TEMSUITE_WORKSPACE", raising=False)
         importlib.reload(registry)
+
+
+# ---------------------------------------------------------------------------
+# SuiteApp 必须只使用调用方传入的 root（回归 2026-10-08：CI 隐式 root 缺陷）
+# ---------------------------------------------------------------------------
+def test_suite_app_uses_only_the_supplied_root(root, monkeypatch):
+    """构造 SuiteApp 时不得依赖 tkinter 的隐式默认 root。
+
+    反例（修复前的真实失败）：``disposable_root`` 用例结束后
+    ``tk._default_root`` 被清空，随后借用共用 root 的用例构造 SuiteApp 时，
+    ``ttk.Style()`` / ``tkfont.nametofont`` / ``tk.StringVar`` 会去创建**新的**
+    Tcl 解释器；在 CI 上那一步直接抛
+    ``_tkinter.TclError: Can't find a usable init.tcl``，
+    即使传入的 root 仍然存活。
+
+    这里把隐式创建路径彻底堵死：任何 ``tk.Tk()`` 都确定性失败，且
+    ``tk._default_root`` 置空。修复后 SuiteApp 只用传入的解释器，
+    构造成功且样式/变量都落在该解释器上。
+    """
+    def _forbid_implicit_tk(*args, **kwargs):
+        raise AssertionError(
+            "SuiteApp 不得创建隐式默认 root；必须使用调用方传入的 root")
+
+    monkeypatch.setattr(tk, "Tk", _forbid_implicit_tk)
+    # 用 monkeypatch 而不是直接赋值：本用例结束后自动恢复这个进程级全局属性，
+    # 不给后续用例留下副作用（模拟 disposable_root 之后的残留状态）。
+    monkeypatch.setattr(tk, "_default_root", None)
+
+    app = SuiteApp(root)             # 只能用传入的 root，否则上面的 AssertionError
+
+    # 变量必须挂在传入的解释器上（而不是另起的隐式 root）
+    assert app.desc_var._root is root
+    assert app.status_var._root is root
+    assert app.desc_var.get() == "双击工具名称即可打开。"
+    assert app.status_var.get() == "就绪"
+
+    # 样式配置必须真的落到传入 root 的 ttk 样式库里
+    rowheight = root.tk.call("ttk::style", "configure", "Suite.Treeview", "-rowheight")
+    assert rowheight, "Suite.Treeview 的 rowheight 未配置到传入的 root 上"
+    assert int(rowheight) > 0

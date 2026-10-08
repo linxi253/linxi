@@ -93,8 +93,12 @@ class SuiteApp:
         工具可能通过切换 ttk 主题清空样式数据库。虽然加载期间已冻结主题切换，
         这里仍在每次加载后重新套用一次作为兜底 —— 样式配置是幂等操作，代价极低。
         """
-        style = ttk.Style()
-        line_space = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        # 显式绑定到本窗口的解释器：不依赖 tkinter 的隐式默认 root。
+        # 测试中 disposable_root 会清空 tk._default_root，此时隐式构造会另起一个
+        # Tcl 解释器（可能直接 TclError），而且样式也不会落到本窗口上。
+        style = ttk.Style(master=self.root)
+        line_space = tkfont.nametofont("TkDefaultFont", root=self.root).metrics(
+            "linespace")
         style.configure("Suite.Treeview", rowheight=line_space + self.px(10))
 
     # ------------------------------------------------------------------
@@ -131,7 +135,7 @@ class SuiteApp:
         # 工具说明面板
         desc_frame = ttk.LabelFrame(left, text="说明", padding=6)
         desc_frame.pack(fill=tk.X, pady=(6, 0))
-        self.desc_var = tk.StringVar(value="双击工具名称即可打开。")
+        self.desc_var = tk.StringVar(master=self.root, value="双击工具名称即可打开。")
         ttk.Label(
             desc_frame,
             textvariable=self.desc_var,
@@ -158,7 +162,7 @@ class SuiteApp:
         # ---- 底部：状态栏 ----
         status = ttk.Frame(outer)
         status.pack(fill=tk.X, pady=(4, 0))
-        self.status_var = tk.StringVar(value="就绪")
+        self.status_var = tk.StringVar(master=self.root, value="就绪")
         ttk.Label(status, textvariable=self.status_var, anchor=tk.W).pack(
             side=tk.LEFT, fill=tk.X, expand=True
         )
