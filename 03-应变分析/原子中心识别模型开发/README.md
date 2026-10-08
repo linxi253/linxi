@@ -2,6 +2,8 @@
 
 HAADF-STEM 与 HRTEM 原子中心模型的独立开发仓库。训练代码、数据治理和评测在这里完成；PPA 稳定版只消费经过验证、带 manifest 和 SHA-256 的发布模型。
 
+**版本隔离边界：** 本项目声明 CPython `>=3.10,<3.11`，当前推理锁固定 numpy 1.26.4 / opencv 4.11；工作区另有使用 numpy 2.x 的工具，应分别使用独立环境。若升级本项目依赖，需要重新验证训练、ONNX 导出和 CPU 推理并同步相应锁；不能从其它工具的测试通过推断本项目兼容。
+
 ## 当前状态
 
 已完成 M1～M3 的软件建设和合成数据验收，包括数据审计/迁移、独立训练运行、断点续训、真实 PyTorch/ONNX 后端。正式科研模型仍需真实数据验收，PPA GUI 接入属于后续 M4。
@@ -37,6 +39,7 @@ python scripts\smoke_test.py
 训练依赖锁定在 `requirements/training-win-py310.lock`，纯 CPU 推理依赖锁定在 `requirements/inference-win-py310.lock`。PyTorch 使用 CUDA 12.8 官方 wheel；部署使用已实测的 ONNX Runtime 1.20.1。
 
 本机原 Miniconda Python 的 ONNX 原生校验器会崩溃；安装脚本准备了项目内官方 CPython 3.10.11 运行时。训练/导出统一运行 `scripts/atom-center.ps1`，标注 GUI 继续使用现有 `.venv` 启动入口。
+
 
 ## 数据原则
 
@@ -75,9 +78,12 @@ python scripts\smoke_test.py
 
 打包脚本先构建并自检 PyInstaller one-folder 便携版，再构建 one-file 备用版；最终 ZIP、单文件 EXE 和 SHA-256 清单写入 `release/`。便携版支持 Windows 10/11 x64，不要求目标电脑安装 Python 或使用管理员权限。发行与标注任务分发方法见 [Windows 便携版说明](docs/windows-portable-release.md)。
 
+注意：打包版本资源 `packaging/windows_version_info.txt` 是手写副本，可能滞后于
+`pyproject.toml`；发布前需核对同步（当前资源记录 0.2.4，落后于单一来源的 0.3.0）。
+
 标注人员无需使用命令行或寻找项目 JSON：启动后选择负责人发送的整个任务文件夹即可。启动页会按系统显示缩放自动调整，主界面右侧参数区在小屏幕上可滚动。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
@@ -88,7 +94,7 @@ python scripts\smoke_test.py
 | 当前版本 | **0.3.0** |
 | 版本来源 | `pyproject.toml` |
 | 入口 | 训练/推理入口见 `docs/training-workflow.md`；Python 包位于 `src/atom_center` |
-| 依赖锁定 | —（无锁定文件，使用 `requirements.txt`） |
+| 依赖锁定 | `requirements/*.lock`（训练/推理两套；另有 CUDA 完整快照 `requirements/lock-win-cu128.txt`） |
 | 许可证 | MIT |
 
 **从源码运行**——必须使用本工具自己的虚拟环境，不要用 PATH 上的 `python`：
@@ -97,7 +103,8 @@ python scripts\smoke_test.py
 ```powershell
 cd <本工具目录>
 python -m venv .venv
-.venv\Scripts\python -X utf8 -m pip install -r requirements.txt
+# 纯 CPU 推理装推理锁；训练/导出的 training 锁由 scripts\setup_environment.ps1 安装（两者版本契约不同，勿混用）
+.venv\Scripts\python -X utf8 -m pip install -r requirements\inference-win-py310.lock
 见本目录 README 的入口说明
 ```
 

@@ -10,6 +10,7 @@ import torch
 import yaml
 from atom_center.storage import read_json, write_json
 from atom_center.data_workflow import verify_dataset
+from atom_center.model_manifest import sha256_file
 from atom_center.training import checkpoint_for_run, _state_dict_digest
 from atom_center.training_dataset import VerifiedDataset
 from atom_center.preprocessing import prepare_tile, input_tensor
@@ -20,6 +21,16 @@ from ultralytics.cfg import get_cfg
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils.torch_utils import init_seeds
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 
 class MemorizationTrainer(DetectionTrainer):
@@ -77,7 +88,16 @@ def main():
     initial = DetectionModel("yolov8s.yaml", nc=1, verbose=False)
     initial_hash = _state_dict_digest(initial)
     expected = read_json(root/"runs/real-workflow-20260909-v2/yolov8s_640/initialization.json")["model_state_sha256"]
-    ckpt = torch.load(root/"runs/real-workflow-20260909-v2/yolov8s_640/training/weights/resume.pt", map_location="cpu", weights_only=False)
+    # 审计 80：resume.pt 走完整 pickle 反序列化，加载前先按 training.py 记录的
+    # state["resume_checkpoint"]["sha256"] 校验文件哈希（与 training.resume_run :201-204 同口径）。
+    # 不能改用 weights_only=True：ckpt["ema"] 是完整 nn.Module 而非纯 state_dict。
+    run_dir = root/"runs/real-workflow-20260909-v2/yolov8s_640"
+    resume_entry = (read_json(run_dir/"state.json").get("resume_checkpoint") or {})
+    resume_path = (run_dir/resume_entry["path"]).resolve() if resume_entry.get("path") else None
+    if not resume_path or not resume_path.is_relative_to(run_dir.resolve()) \
+            or sha256_file(resume_path) != resume_entry.get("sha256"):
+        raise SystemExit("resume.pt is missing or its SHA-256 differs from the training record; refusing to unpickle")
+    ckpt = torch.load(resume_path, map_location="cpu", weights_only=False)
     model = ckpt["ema"].float()
     changes = {k:float((v.float()-initial.state_dict()[k].float()).abs().max()) for k,v in model.state_dict().items() if v.is_floating_point()}
     report = {"initialization_reproduced":initial_hash==expected, "optimizer_updates":ckpt["updates"],

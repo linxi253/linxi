@@ -1,0 +1,23 @@
+# 01-视频与数据提取/视频切片工具 -- 已声明安装依赖闭包的 Windows x64 / Python 3.12 解析锁
+# 来源：-r requirements.lock（原锁原样保留，未改动、未升级其中任何版本）
+# 追加项：原锁未 pin、但属于其默认 active Requires-Dist 闭包的包；
+#         版本取自当前已通过业务回归的环境 metadata（非重新解析到更新版本）。
+# 生成方式：见 环境隔离说明.md「依赖闭包解析锁」一节；
+#           用 .tools/check-env-isolation.py 复核闭包，pip check 验证安装。
+# 复现：python -m venv .venv; .venv\Scripts\python -X utf8 -m pip install -r requirements.resolved-win-py312.lock.txt
+# 注意：原锁本就包含 pytest 与 PyInstaller（开发/发布依赖），本闭包如实包含
+#       它们的传递依赖；这不是一份“纯运行锁”，也不声称是。
+# 边界：仅覆盖 Windows x64 + 该 Python minor 的已声明安装依赖闭包；
+#       不含 extras、wheel 哈希、外部 FFmpeg 与模型资产的跨平台可复现性。
+
+-r requirements.lock
+
+altgraph==0.17.5
+colorama==0.4.6
+iniconfig==2.3.0
+packaging==26.3
+pefile==2024.8.26
+pluggy==1.6.0
+pyinstaller-hooks-contrib==2026.8
+pywin32-ctypes==0.2.3
+setuptools==84.0.0

@@ -1,6 +1,15 @@
 """Same fine-tuning protocol as fixed-box arm; only supervision boxes differ."""
 from pathlib import Path
 import sys
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atom_center.configuration import load_config
 from atom_center.training import train_run,checkpoint_for_run

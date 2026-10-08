@@ -12,7 +12,7 @@ v6.1（算法版）合并而来：既保留文件安全、TIFF 结构校验、�
   `border_mode`/`border_value`、
   `nfeatures` 默认 5000、死代码清理。
 
-两个旧版本已归档至 `<仓库根>\08-历史版本`，仅用于追溯。
+两个旧版本（v5.2、v6）的源码归档在开发机的 `<仓库根>\08-历史版本`，该归档未随本仓库分发（仓库内不存在此目录）；仓库内仅保留合并后的 v7。
 
 ## 安全行为
 
@@ -113,7 +113,8 @@ $env:PYTHONNOUSERSITE = "1"
 构建后必须运行测试，并确认打包程序可启动、可读写小型 TIFF、归档中包含
 `drift_core` 和可选 tkdnd 文件。当前打包配置为 `TIFF漂移矫正工具v7.3.spec`
 （产物 `dist\TIFF漂移矫正工具v7.3.exe`）；历史版本 spec 与 EXE（v7/v7.1/v7.2）
-保留用于对照，**不要**用旧 spec 打包当前代码（版本资源与产物名均不匹配）。
+保留用于对照（历史 spec 位于 `legacy\pyinstaller-specs\`），**不要**用旧
+spec 打包当前代码（版本资源与产物名均不匹配）。
 请始终使用上述隔离环境构建，避免全局 Python/Conda 中的无关可选包被误收集进程序。
 
 ## 主要文件
@@ -123,7 +124,8 @@ $env:PYTHONNOUSERSITE = "1"
 - `tests/test_drift_core.py`：核心回归测试。
 - `tests/test_drift_correction.py`：界面逻辑回归测试（无窗口）。
 - `TIFF漂移矫正工具v7.3.spec`：当前版本 PyInstaller 打包配置；
-  `v7.2.spec`、`v7.1.spec` 与 `v7.spec` 为历史版本打包配置，仅供对照。
+  `v7.2.spec`、`v7.1.spec` 与 `v7.spec` 为历史版本打包配置，仅供对照，
+  位于 `legacy\pyinstaller-specs\`。
 - `requirements*.txt` / `requirements*.lock`：运行与构建依赖。
 
 ## 已知边界
@@ -137,7 +139,7 @@ $env:PYTHONNOUSERSITE = "1"
 - 版本号单一来源为 `drift_core.__version__`；GUI 标题、pyproject、打包
   资源与审计报告均由其派生。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
@@ -146,7 +148,7 @@ $env:PYTHONNOUSERSITE = "1"
 | 项 | 内容 |
 |---|---|
 | 当前版本 | **7.3.0** |
-| 版本来源 | `pyproject.toml` |
+| 版本来源 | `drift_core.py`（`__version__`） |
 | 入口 | `drift_correction.py` |
 | 依赖锁定 | `requirements.lock` |
 | 许可证 | MIT |

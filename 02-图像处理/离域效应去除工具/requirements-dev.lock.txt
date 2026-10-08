@@ -10,9 +10,17 @@ cycler==0.12.1
 exceptiongroup==1.3.1
 fonttools==4.65.0
 imagecodecs==2025.3.30
+# 补录：scikit-image==0.25.2 的传递依赖（pip show Requires），与下文
+# lazy-loader/networkx 一并为 scikit-image 入锁补齐；Requires-Python 均
+# 兼容本锁 Python 3.10 口径，版本取自仓库 venv 实装值。
+imageio==2.37.4
 iniconfig==2.3.0
 kiwisolver==1.5.1
+# 补录：scikit-image 的传递依赖（见 imageio 条目注释）。
+lazy-loader==0.6
 matplotlib==3.10.9
+# 补录：scikit-image 的传递依赖（lazy-loader 需要 networkx>=3.0）。
+networkx==3.4.2
 numpy==2.2.6
 packaging==26.3
 pefile==2024.8.26
@@ -25,6 +33,9 @@ pyparsing==3.3.3
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 pywin32-ctypes==0.2.3
+# 补录：requirements-dev.txt 已声明 scikit-image>=0.21（validate_real_data.py
+# 轮廓提取需要），此前漏入本锁。0.25.2 为仓库 venv 实装版本，存在 cp310 wheel。
+scikit-image==0.25.2
 scipy==1.15.3
 six==1.17.0
 tifffile==2025.5.10

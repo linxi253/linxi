@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -17,8 +18,46 @@ from .models import VideoInfo
 MINIMUM_SAFE_VERSION = (8, 0, 3)
 
 
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """流式计算文件 SHA-256（不整块读入内存）。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 class FFmpegError(RuntimeError):
     pass
+
+
+def _parse_provenance_hashes(provenance: Path) -> dict[str, str]:
+    """从 PROVENANCE.md 的 Markdown 表格解析 ``文件名 -> sha256``（小写键）。
+
+    只接受两列且第二列是 64 位十六进制的行；其它行忽略。
+
+    **存在但读不了 ≠ 不存在**（回归 2026-10-04 R21）：调用方已确认文件存在，
+    因此这里的读取/解码失败是真实错误，转为 :class:`FFmpegError` 交由 resolve
+    收集（且不执行 ``-version``）；只有"文件确实不存在"才由调用方按缺记录处理。
+    """
+    try:
+        text = provenance.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise FFmpegError(
+            f"PROVENANCE 文件存在但无法读取或解码: {provenance}（{error}）；"
+            "未校验随包二进制来源，拒绝继续"
+        ) from error
+    table: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 2:
+            continue
+        name, digest = cells
+        if re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            table[name.lower()] = digest.lower()
+    return table
 
 
 @dataclass(frozen=True)
@@ -112,6 +151,57 @@ class FFmpegManager:
             root / "tools" / "ffmpeg" / "ffmpeg",
         ]
 
+    def _is_bundled(self, path: Path) -> bool:
+        """该二进制是否来自随包目录（需要按同目录 PROVENANCE.md 校验哈希）。
+
+        只有随包候选受强制校验；用户显式指定的路径与 PATH 上的系统版本
+        只记录不阻断（沿用既有 allow_unsafe/外部来源政策）。
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        for candidate in self._bundled_candidates():
+            try:
+                if candidate.exists() and candidate.resolve() == resolved:
+                    return True
+            except OSError:
+                continue
+        return False
+
+    def _provenance_mismatch(self, path: Path) -> str | None:
+        """按同目录 PROVENANCE.md 复核二进制哈希；不符时返回错误描述。
+
+        兼容行为（**明确记录，不声称有完整可信来源保证**）：
+        * 同目录**不存在** PROVENANCE.md → 返回 None（不阻断；开发/源码环境下
+          可能尚未生成该文件）。
+        * PROVENANCE.md 里**没有**该文件的记录 → 返回 None（不阻断）。
+        也就是说本校验只能发现"有记录却被替换"的情况，不能证明来源可信。
+
+        与上面两类**明确区分**（回归 2026-10-04 R21）：
+        * 文件**存在**却读不了/解码失败（PermissionError、损坏 UTF-8 等）
+          → 抛 :class:`FFmpegError`，由 :meth:`resolve` 收集进 failures，
+          且**不会**执行 ``-version``。"存在但不可读"是真实错误，不能当成
+          "没有记录"而静默放行。
+        * 计算哈希时的 IO 异常同样转 :class:`FFmpegError`。
+        """
+        provenance = path.parent / "PROVENANCE.md"
+        if not provenance.is_file():
+            return None                                # 确实不存在：兼容放行
+        try:
+            expected = _parse_provenance_hashes(provenance).get(path.name.lower())
+            if not expected:
+                return None                            # 存在但无该文件记录：兼容放行
+            actual = _sha256_file(path)
+        except OSError as error:
+            raise FFmpegError(f"无法校验 {path} 的随包来源记录: {error}") from error
+        if actual != expected:
+            return (
+                f"{path} 的 SHA-256 与 PROVENANCE.md 不符"
+                f"（期望 {expected[:16]}…，实际 {actual[:16]}…），可能已被替换"
+            )
+        return None
+
     def _candidates(self) -> list[Path]:
         candidates: list[Path] = []
         if self.custom_path:
@@ -164,12 +254,28 @@ class FFmpegManager:
         failures: list[str] = []
         for ffmpeg in self._candidates():
             try:
+                suffix = ".exe" if ffmpeg.suffix.lower() == ".exe" else ""
+                ffprobe = ffmpeg.with_name(f"ffprobe{suffix}")
+                # 随包候选：**先**按 PROVENANCE.md 复核 ffmpeg 与 ffprobe 两个
+                # 二进制的哈希，再执行任何 `-version` —— 不先运行已知不匹配的程序
+                # （回归 2026-10-04）。非随包候选（用户显式路径/PATH/imageio）
+                # 不做强制校验，只走版本检查，保持既有政策。
+                if not self.allow_unsafe and self._is_bundled(ffmpeg):
+                    # 只对有来源记录的随包二进制校验；缺 PROVENANCE.md 或缺该文件
+                    # 记录时 _provenance_mismatch 返回 None（兼容，不阻断）。
+                    mismatches = [
+                        message for message in
+                        (self._provenance_mismatch(binary)
+                         for binary in (ffmpeg, ffprobe) if binary.is_file())
+                        if message
+                    ]
+                    if mismatches:
+                        failures.extend(mismatches)
+                        continue
                 version = self._version(ffmpeg)
                 if version < MINIMUM_SAFE_VERSION and not self.allow_unsafe:
                     failures.append(f"{ffmpeg} 版本 {version} 低于安全下限 {MINIMUM_SAFE_VERSION}")
                     continue
-                suffix = ".exe" if ffmpeg.suffix.lower() == ".exe" else ""
-                ffprobe = ffmpeg.with_name(f"ffprobe{suffix}")
                 if not ffprobe.is_file():
                     failures.append(f"{ffmpeg} 缺少同目录 ffprobe")
                     continue
@@ -337,9 +443,11 @@ def probe_video(
     stream_items = payload.get("streams", [])
     if not isinstance(stream_items, list):
         raise FFmpegError(f"ffprobe 返回的视频流结构无效: {path.name}")
+    # 无条件收集全部可用流（只剔除封面图流），让 stream_count 反映真实
+    # 可用视频流总数供多流告警使用；解码仍固定用首选流（第一个非封面流）。
     streams = []
     video_ordinal = 0
-    chosen_ordinal = 0
+    chosen_ordinal: int | None = None
     for item in stream_items:
         if not isinstance(item, dict) or item.get("codec_type") != "video":
             continue
@@ -347,11 +455,12 @@ def probe_video(
         disposition = item.get("disposition")
         if isinstance(disposition, dict) and disposition.get("attached_pic"):
             is_attached = True
-        if not streams and not is_attached:
+        if not is_attached:
             streams.append(item)
-            chosen_ordinal = video_ordinal
+            if chosen_ordinal is None:
+                chosen_ordinal = video_ordinal
         video_ordinal += 1
-    if not streams:
+    if chosen_ordinal is None or not streams:
         raise FFmpegError(f"未找到可用的视频流: {path.name}")
     stream = streams[0]
     try:

@@ -1,7 +1,15 @@
 """端到端验收：Au [100] HAADF 模拟 + 导出 + 系列，检查全部产物。
 
-运行：python tests/test_e2e_au.py        （约 3–6 分钟）
-产物写到 tests/output/。
+两种运行方式都支持：
+
+* ``python tests/test_e2e_au.py``  —— 脚本模式（约 3–6 分钟），产物写到
+  ``tests/output/``；
+* ``pytest tests/test_e2e_au.py``  —— pytest 模式。此前 ``test_single(pl)`` /
+  ``test_display(res)`` 把上一个用例的返回值当 fixture 用，pytest 收集时报
+  ``fixture 'pl' not found``（2 errors）。现改为真正的 pytest fixture（模块级），
+  两个入口共用同一份单次/系列逻辑，不再 skip/ignore 伪绿。
+
+pytest 模式下的产物写到 ``tmp_path``（不污染源码树）；脚本模式仍写 ``tests/output/``。
 """
 from __future__ import annotations
 import sys
@@ -13,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import numpy as np
+import pytest
 
 from stem_tool.export import export_all
 from stem_tool.params import StemParams
@@ -35,7 +44,8 @@ def base_params(**kw) -> StemParams:
     return p.replace(**kw) if kw else p
 
 
-def test_plan():
+def build_plan():
+    """构建并校验模拟计划（脚本与 pytest 共用）。"""
     p = base_params()
     pl = plan(p)
     print(f"[计划] 超胞 {np.round(pl.cell_a,2)} Å  {pl.n_atoms} 原子")
@@ -49,7 +59,8 @@ def test_plan():
     return pl
 
 
-def test_single(pl):
+def run_single(pl, out_dir: Path):
+    """跑单次模拟并导出（脚本与 pytest 共用）。"""
     p = base_params()
     res = run_simulation(p, progress=lambda f, m: None, plan_obj=pl)
     r = res.result
@@ -61,9 +72,8 @@ def test_single(pl):
     adf = res.image("ADF")
     assert 0 < adf.max() < 1.0
     assert adf.max() / adf.mean() > 2.0, "ADF 衬度过低，可能未形成原子柱衬度"
-    # 导出
-    OUT.mkdir(parents=True, exist_ok=True)
-    paths = export_all(res, OUT, basename="Au100_HAADF_demo",
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = export_all(res, out_dir, basename="Au100_HAADF_demo",
                        kind_map={"tiff": True, "png": True, "npy": True, "json": True},
                        detectors=res.detector_names())
     for k, v in paths.items():
@@ -72,9 +82,10 @@ def test_single(pl):
     return res
 
 
-def test_series():
+def run_series_case(out_dir: Path):
+    """厚度系列 + 蒙太奇（脚本与 pytest 共用）。"""
     p = base_params(scan_points=20, n_phonons=4)
-    s = run_series(p, "thickness", [0.0], [2.0, 5.0, 10.0, 15.0], OUT / "series",
+    s = run_series(p, "thickness", [0.0], [2.0, 5.0, 10.0, 15.0], out_dir / "series",
                    kinds={"tiff": True, "png": True, "npy": False, "json": False},
                    montage=True, progress=lambda f, m: None)
     print(f"[厚度系列] {s['n_images']} 张 -> {s['out_dir']}")
@@ -88,7 +99,7 @@ def test_series():
     return s
 
 
-def test_display(res):
+def check_display(res):
     """显示管线（极性/模糊/对比度）与取向渲染不产生异常。"""
     img = res.image("ADF")
     for pol in (1, -1):
@@ -101,10 +112,40 @@ def test_display(res):
     print(f"[显示] 极性/模糊/对比度归一化与 17° 旋转+镜像渲染 OK（{rot.shape}）")
 
 
+# ---------------------------------------------------------------------------
+# pytest 入口：真正的 fixture（此前把返回值当 fixture 用，导致 2 个 collect error）
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def plan_obj():
+    return build_plan()
+
+
+@pytest.fixture(scope="module")
+def single_result(plan_obj, tmp_path_factory):
+    return run_single(plan_obj, tmp_path_factory.mktemp("au100_e2e"))
+
+
+def test_plan(plan_obj):
+    assert plan_obj.n_atoms > 1000 and plan_obj.n_fft > 0
+
+
+def test_single(single_result):
+    assert single_result is not None
+    assert single_result.image("ADF").max() > 0
+
+
+def test_display(single_result):
+    check_display(single_result)
+
+
+def test_series(tmp_path):
+    run_series_case(tmp_path)
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    p = test_plan()
-    r = test_single(p)
-    test_display(r)
-    test_series()
+    p = build_plan()
+    r = run_single(p, OUT)
+    check_display(r)
+    run_series_case(OUT)
     print("\n端到端验收通过 ✔")

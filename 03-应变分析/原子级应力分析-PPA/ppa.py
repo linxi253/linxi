@@ -16,6 +16,16 @@
 
 依赖: numpy, scipy, matplotlib, tifffile, tkinter
 """
+import sys
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -74,11 +84,11 @@ from matplotlib.collections import EllipseCollection
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
 from scipy.ndimage import maximum_filter, gaussian_filter
-from scipy.optimize import curve_fit
 from scipy.interpolate import griddata, CloughTocher2DInterpolator
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 import csv
+import logging
 import os
 import sys
 import queue
@@ -89,16 +99,21 @@ from numpy.lib.stride_tricks import sliding_window_view
 from ppa_core import (
     AnalysisError,
     ImageLoadError,
+    LATTICE_CONDITION_GUIDANCE,
     ProjectValidationError,
     compute_cst_strain,
     compute_local_peak_pair_strain,
+    gaussian_refine_point,
     load_analysis_image,
     load_project as load_versioned_project,
     save_project as save_versioned_project,
+    validate_max_condition,
     validate_reference_lattice,
 )
 
 LOCAL_PPA_ALGORITHM_ID = "peak-pairs-local-all-points-v2"
+
+logger = logging.getLogger(__name__)
 
 # 导入 butter.py 的滤波功能 (预处理用)。
 # 优先使用环境变量 PPA_HRTEM_FILTER_DIR 指定的目录，其次回退到历史兄弟目录；
@@ -411,16 +426,24 @@ def infer_atom_chain_from_anchors(all_points, anchor_indices, *, label="原子�
     return ordered.astype(np.int64, copy=False)
 
 
-def estimate_reference_vectors_from_chains(a_points, b_points, *, min_points=3):
-    """Estimate and validate two reference vectors from two ordered atom chains."""
+def estimate_reference_vectors_from_chains(a_points, b_points, *, min_points=3,
+                                           max_condition=None):
+    """Estimate and validate two reference vectors from two ordered atom chains.
+
+    ``max_condition`` 由调用方传入，保证与用户在界面上配置的阈值一致；
+    ``None`` 保持历史默认（30.0）。
+    """
     a_fit = fit_lattice_vector_from_chain(a_points, label="a 方向原子列", min_points=min_points)
     b_fit = fit_lattice_vector_from_chain(b_points, label="b 方向原子列", min_points=min_points)
-    validate_reference_lattice(a_fit.vector, b_fit.vector)
+    if max_condition is None:
+        validate_reference_lattice(a_fit.vector, b_fit.vector)
+    else:
+        validate_reference_lattice(a_fit.vector, b_fit.vector, max_condition=max_condition)
     return a_fit, b_fit
 
 
 def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
-                                   min_atoms=10, max_iter=3):
+                                   min_atoms=10, max_iter=3, max_condition=None):
     """
     仅用「无应变参考区」内的原子精化基矢，不吸收区外的真实应变。
 
@@ -463,7 +486,11 @@ def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
     a_r = np.asarray(a_vec, dtype=np.float64).copy()
     b_r = np.asarray(b_vec, dtype=np.float64).copy()
     try:
-        indices = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+        if max_condition is None:
+            indices = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+        else:
+            indices = assign_unique_lattice_indices(
+                sub, o_r, a_r, b_r, max_condition=max_condition).lattice_indices
     except (AnalysisError, ValueError):
         return origin, a_vec, b_vec, False, n_used
 
@@ -483,7 +510,11 @@ def refine_lattice_basis_in_region(pts, origin, a_vec, b_vec, region_mask,
         o_r, a_r, b_r = o_c, a_c, b_c
         applied = True
         try:
-            idx_c = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+            if max_condition is None:
+                idx_c = assign_unique_lattice_indices(sub, o_r, a_r, b_r).lattice_indices
+            else:
+                idx_c = assign_unique_lattice_indices(
+                    sub, o_r, a_r, b_r, max_condition=max_condition).lattice_indices
         except (AnalysisError, ValueError):
             break
         if np.array_equal(idx_c, indices):
@@ -510,7 +541,8 @@ class LatticeAssignment:
 
 def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
                                   max_search_radius=4,
-                                  low_confidence_limit=0.45):
+                                  low_confidence_limit=0.45,
+                                  max_condition=None):
     """Assign every accepted atom to a unique integer lattice site.
 
     Independent rounding can map two distinct accepted atoms to the same
@@ -521,6 +553,11 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
     ``low_confidence_limit`` is the maximum allowed residual in either lattice
     coordinate.  A larger residual is reported but never removes or skips the
     atom.
+
+    ``max_condition`` must be threaded in from the caller so the lattice
+    condition-number limit used here matches the one the user configured; the
+    ``None`` default keeps backward compatibility (30.0 via
+    :func:`validate_reference_lattice`).
     """
     raw_points = np.asarray(points, dtype=np.float64)
     if raw_points.ndim != 2 or raw_points.shape[1] != 2:
@@ -532,7 +569,10 @@ def assign_unique_lattice_indices(points, origin, a_vec, b_vec, *,
     b_vec = np.asarray(b_vec, dtype=np.float64)
     if origin.shape != (2,) or a_vec.shape != (2,) or b_vec.shape != (2,):
         raise ValueError("origin, a_vec and b_vec must have shape (2,)")
-    validate_reference_lattice(a_vec, b_vec)
+    if max_condition is None:
+        validate_reference_lattice(a_vec, b_vec)
+    else:
+        validate_reference_lattice(a_vec, b_vec, max_condition=max_condition)
     matrix = np.column_stack((a_vec, b_vec))
     coords = (raw_points - origin) @ np.linalg.inv(matrix).T
     naive = np.rint(coords).astype(int)
@@ -695,8 +735,12 @@ def _interpolate_strain_grids(fields, image_shape, grid_size=200):
         return {}, {}, None
 
     h, w = image_shape
-    x_min, x_max = 0, w - 1
-    y_min, y_max = 0, h - 1
+    # 工单74: 云图 extent 以像素边缘为界 (-0.5 ~ N-0.5)。底图 imshow 用默认
+    # extent, 像素中心在整数坐标、图像盒为 [-0.5, N-0.5]; 若云图盒取 (0, N-1),
+    # 不仅整体内缩半像素, N 个插值单元的中心还与网格节点
+    # linspace(0, N-1, grid_size) 最多错开半个网格(边缘处), 云图相对底图错位。
+    x_min, x_max = -0.5, w - 0.5
+    y_min, y_max = -0.5, h - 0.5
     extent = (x_min, x_max, y_min, y_max)
 
     gx = np.linspace(x_min, x_max, grid_size)
@@ -780,6 +824,10 @@ class AtomMarkerApp:
     POINT_MARKER_RADIUS = 7.0   # 原子标记圆半径 (图像像素, 随缩放变化)
     MAX_LABELS_DRAWN = 400      # 编号标签绘制上限 (超出则仅在放大后画视口内的)
     MAX_UNDO_ENTRIES = 500      # 撤销栈上限, 防止超长会话内存无限增长
+    # 参考晶格/局部 PPA 共用的条件数上限默认值。同时作为**类级**默认，
+    # 使不经 __init__ 构造的实例（测试用 __new__）也能解析到与历史一致的 30.0，
+    # 而不是抛 AttributeError。__init__ 会写入同值的实例属性。
+    lattice_max_condition = float(LATTICE_CONDITION_GUIDANCE["general"])
 
     # ---- 检测参数预设 ----
     DETECT_PRESETS = {
@@ -905,6 +953,14 @@ class AtomMarkerApp:
         self.detect_min_dist = 8     # 最小原子间距
         self.detect_window = 5       # 质心精炼窗口 (奇数)
         self.centroid_method = "com" # "com" | "gaussian"
+        # 工单27: 最近一次高斯精炼的回退统计 (None 或 {n_points,n_fallback,fallback_ratio})
+        self.last_gaussian_refine_stats = None
+        # 参考晶格与局部 PPA 共用的条件数上限。默认取
+        # ppa_core.strain.LATTICE_CONDITION_GUIDANCE["general"]（30.0，与历史行为
+        # 一致）；用户按体系放宽/收紧后，**整条调用链**（参考区精化、晶格索引分配、
+        # 局部应变、参考保存/加载）都必须使用同一取值，否则放宽会被隐藏的默认值
+        # 再次挡下（回归 2026-10-03）。阈值必须是有限正数。
+        self.lattice_max_condition = float(LATTICE_CONDITION_GUIDANCE["general"])
         self._suggested_threshold = None  # 校准模式推算的阈值（临时）
         self.von_mises_coeff = 4.0 / 9.0  # von Mises 系数 (2D 平面应变严格值=4/9; 文献经验值=2/3)
 
@@ -1398,9 +1454,17 @@ class AtomMarkerApp:
             return self.processed_image
         return self.image
 
-    def _get_work_image(self):
-        """返回用于原子检测的图像（可能为预处理图像）"""
-        if self.use_preprocessed.get() and self.processed_image is not None:
+    def _get_work_image(self, use_preprocessed=None):
+        """返回用于原子检测的图像（可能为预处理图像）。
+
+        use_preprocessed: 已在主线程快照的布尔值。后台 worker 线程必须传入
+        快照，不得经 None 分支现场读取 tk 变量（Tk 非线程安全，工单75：
+        实测主循环未派发时跨线程 .get() 抛 RuntimeError）；None 仅限
+        主线程回调（如校准流程）使用。
+        """
+        if use_preprocessed is None:
+            use_preprocessed = self.use_preprocessed.get()
+        if use_preprocessed and self.processed_image is not None:
             return self.processed_image
         return self.image
 
@@ -2880,7 +2944,8 @@ class AtomMarkerApp:
             a_points = all_points[a_indices]
             b_points = all_points[b_indices]
             a_fit, b_fit = estimate_reference_vectors_from_chains(
-                a_points, b_points, min_points=2)
+                a_points, b_points, min_points=2,
+                max_condition=self.lattice_max_condition)
             self.ref_multi_auto_indices = [a_indices.tolist(), b_indices.tolist()]
         except (AnalysisError, IndexError, ValueError) as error:
             messagebox.showerror("多点参考选择无效", str(error))
@@ -2998,7 +3063,8 @@ class AtomMarkerApp:
         a_len = np.linalg.norm(a_vec)
         b_len = np.linalg.norm(b_vec)
         try:
-            validate_reference_lattice(a_vec, b_vec)
+            validate_reference_lattice(a_vec, b_vec,
+                                       max_condition=self.lattice_max_condition)
         except AnalysisError as error:
             messagebox.showerror("参考矢量无效", str(error))
             self.ref_select_indices = []
@@ -3639,32 +3705,48 @@ class AtomMarkerApp:
         self.status.config(text="正在后台检测原子点...")
         self.root.update_idletasks()
         self._ensure_worker_polling()
+        # 工单75: 在主线程把 tk.BooleanVar 快照成普通 bool 传入 worker,
+        # worker 内不得再读 tkinter 变量 (Tk 非线程安全)。
+        use_preprocessed = bool(self.use_preprocessed.get())
 
         def _run():
             try:
                 if generation != self._job_generation:
                     return
-                new_points = self._detect_peaks_worker(
-                    min_distance, sigma, window, threshold, bright)
+                new_points, gaussian_fallback_stats = self._detect_peaks_worker(
+                    min_distance, sigma, window, threshold, bright,
+                    use_preprocessed)
                 self._worker_queue.put(
-                    ('detect_done', generation, (new_points,)))
+                    ('detect_done', generation,
+                     (new_points, gaussian_fallback_stats)))
             except Exception as error:
                 self._worker_queue.put(('detect_error', generation, str(error)))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _finish_auto_detect(self, new_points):
+    def _finish_auto_detect(self, new_points, gaussian_fallback_stats=None):
         """Commit a completed auto-detection on the Tk main thread."""
         if not new_points:
             messagebox.showinfo("提示", "未检测到任何原子点，请调整参数。")
             self.status.config(text="自动检测未找到原子点")
             return
 
+        # 工单27: 记录回退比例供项目元数据存档, 并在界面上提示回退情况
+        self.last_gaussian_refine_stats = gaussian_fallback_stats
+        fallback_note = ""
+        if gaussian_fallback_stats and gaussian_fallback_stats.get('n_fallback'):
+            fallback_note = (
+                f"\n⚠ {gaussian_fallback_stats['n_fallback']}"
+                f"/{gaussian_fallback_stats['n_points']} 个点高斯拟合失败，"
+                f"已回退 COM 亚像素质心 "
+                f"(比例 {gaussian_fallback_stats['fallback_ratio']:.1%})")
+
         # 三选一: 「是」追加(非破坏), 「否」替换(破坏性, 明确标注), 「取消」丢弃。
         choice = messagebox.askyesnocancel(
             "检测完成",
             f"检测到 {len(new_points)} 个原子点\n"
-            f"质心方法: {'COM' if self.centroid_method == 'com' else '2D Gaussian'}\n\n"
+            f"质心方法: {'COM' if self.centroid_method == 'com' else '2D Gaussian'}\n"
+            f"{fallback_note}\n"
             f"如何处理检测结果？\n"
             f"  [是(Y)]   追加到当前列表 (保留已有 {len(self.points)} 个点)\n"
             f"  [否(N)]   替换现有所有点 (当前 {len(self.points)} 个点将被丢弃)\n"
@@ -3681,10 +3763,14 @@ class AtomMarkerApp:
         self._reset_ref_multi_selection()
         self._clear_analysis_results()
         self.refresh_display()
-        self.status.config(text=f"自动检测完成，共 {len(self.points)} 个原子点 (亚像素定位)")
+        self.status.config(text=f"自动检测完成，共 {len(self.points)} 个原子点 (亚像素定位)"
+                                f"{fallback_note.strip()}")
 
-    def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright):
-        img = self._get_work_image().copy()
+    def _detect_peaks_worker(self, min_distance, sigma, window, threshold, bright,
+                             use_preprocessed):
+        # 工单75: use_preprocessed 必填(无默认值), 强制调用方在主线程快照后传入,
+        # worker 内经 None 分支现场读 tk 变量会在编译期签名层面就不再可能。
+        img = self._get_work_image(use_preprocessed).copy()
         h_img, w_img = img.shape
 
         # 记住检测 ROI 边界，后续做后过滤（不要用 -inf 污染图像）
@@ -3717,7 +3803,7 @@ class AtomMarkerApp:
 
         coords = np.argwhere(peaks_mask)  # (row, col)
         if len(coords) == 0:
-            return []
+            return [], None
 
         # 4) 按强度排序
         vals = img_filt[peaks_mask]
@@ -3744,7 +3830,7 @@ class AtomMarkerApp:
 
         coords = coords[keep_mask]
         if len(coords) == 0:
-            return []
+            return [], None
 
         # 5) 非极大值抑制（大规模时用向量化贪心，避免 O(N²) 逐点比较）
         selected = []
@@ -3760,6 +3846,7 @@ class AtomMarkerApp:
             selected = np.array(selected)  # (N,2)  (row, col)
 
         # 6) 亚像素质心修正 ⭐
+        gaussian_fallback_stats = None
         if self.centroid_method == "com" and len(selected) > 20:
             # COM 批量矢量化: N>20 时比逐原子调用快 10-50×
             cx_arr, cy_arr = self._refine_centroids_batch(img, selected, window=window)
@@ -3767,18 +3854,33 @@ class AtomMarkerApp:
                           for i in range(len(cx_arr))]
         else:
             # 少数 COM 或高斯拟合: 保留逐原子精修
+            # 工单27: 高斯拟合失败的点会静默回退 COM, 必须计数并提示
+            self._gaussian_fallback_count = 0
             new_points = []
-            for c in selected:
-                cx, cy = self._refine_centroid(img, c[1], c[0], window=window)
+            for i, c in enumerate(selected):
+                cx, cy = self._refine_centroid(img, c[1], c[0], window=window,
+                                               point_index=i + 1)
                 new_points.append((cx, cy))
+            if self.centroid_method == "gaussian":
+                n_fallback = self._gaussian_fallback_count
+                if n_fallback:
+                    logger.warning(
+                        "高斯精炼: %d/%d 个点高斯拟合失败，已回退 COM 亚像素质心",
+                        n_fallback, len(selected))
+                gaussian_fallback_stats = {
+                    'n_points': int(len(selected)),
+                    'n_fallback': int(n_fallback),
+                    'fallback_ratio': (n_fallback / len(selected)) if len(selected) else 0.0,
+                }
 
-        return new_points
+        return new_points, gaussian_fallback_stats
 
-    def _refine_centroid(self, image, x, y, window=5):
+    def _refine_centroid(self, image, x, y, window=5, point_index=None):
         """
         亚像素质心精炼 (COM 迭代收敛)
         x, y: 整数像素坐标 (col, row)
         window: 局部窗大小 (奇数)
+        point_index: 1 起算的点序号, 仅用于高斯回退时的告警定位
         返回: (sub_x, sub_y) 亚像素坐标
         """
         # 高斯拟合 (单次; 失败或越界则回退 COM)
@@ -3786,6 +3888,12 @@ class AtomMarkerApp:
             fit = self._gaussian_fit_window(image, x, y, window)
             if fit is not None:
                 return fit
+            # 工单27: 回退不再静默 —— 计数 + 日志, 汇总比例由调用方上报
+            self._gaussian_fallback_count = getattr(
+                self, '_gaussian_fallback_count', 0) + 1
+            logger.warning(
+                "第 %s 个点高斯拟合失败，已回退 COM 亚像素质心",
+                point_index if point_index is not None else "?")
 
         # COM: 迭代 2 次, 每次以前次质心重新居中窗口, 消除窗口偏心偏差
         hw = window // 2
@@ -3832,51 +3940,15 @@ class AtomMarkerApp:
         """
         2D 高斯拟合亚像素定位 (供 _refine_centroid 调用)
 
+        工单27: 拟合实现收敛到 ppa_core.refine.gaussian_refine_point
+        (与 atomic_core 同源口径的规范实现), 本方法仅保留
+        "(sub_x, sub_y) 或 None (拟合失败)" 的旧契约。
+
         初值取 ROI 内峰值位置 (而非固定几何中心), 适配靠边原子;
         校验拟合中心偏离初始位置不超过窗口半径, 防止误收敛到邻近峰。
-
-        返回: (sub_x, sub_y) 或 None (拟合失败)
         """
-        hw = window // 2
-        H, W = image.shape
-        xi, yi = int(round(x)), int(round(y))
-        y0 = max(0, yi - hw)
-        y1 = min(H, yi + hw + 1)
-        x0 = max(0, xi - hw)
-        x1 = min(W, xi + hw + 1)
-        if y1 - y0 < 3 or x1 - x0 < 3:
-            return None
-
-        roi = image[y0:y1, x0:x1].astype(np.float64)
-        bg = np.percentile(roi, 5)
-        roi = np.maximum(roi - bg, 0)
-        if roi.max() <= 0:
-            return None
-
-        try:
-            def gauss2d(xy, xo, yo, sx, sy, A, bg2):
-                xv, yv = xy
-                return A * np.exp(-((xv - xo) ** 2 / (2 * max(sx, 0.3) ** 2)
-                                    + (yv - yo) ** 2 / (2 * max(sy, 0.3) ** 2))) + bg2
-
-            ys, xs = np.mgrid[0:roi.shape[0], 0:roi.shape[1]]
-            xdata = np.vstack((xs.ravel(), ys.ravel()))
-            ydata = roi.ravel()
-            # 初值: ROI 内峰值位置 (靠边窗口不再以几何中心为初值)
-            pk_r, pk_c = np.unravel_index(np.argmax(roi), roi.shape)
-            p0 = [float(pk_c), float(pk_r), 1.0, 1.0, float(roi.max()), 0]
-            bounds = ([0, 0, 0.3, 0.3, 0, -np.inf],
-                      [roi.shape[1] - 1, roi.shape[0] - 1, 5, 5, np.inf, np.inf])
-            popt, _ = curve_fit(gauss2d, xdata, ydata, p0=p0,
-                                bounds=bounds, maxfev=500)
-            cx = x0 + popt[0]
-            cy = y0 + popt[1]
-            # 校验: 偏离初始位置不超过窗口半径 (原先误用整个窗口宽, 宽松 2 倍)
-            if abs(cx - x) <= hw and abs(cy - y) <= hw:
-                return cx, cy
-        except Exception:
-            pass
-        return None
+        cx, cy, fitted = gaussian_refine_point(image, x, y, window)
+        return (cx, cy) if fitted else None
 
     def _refine_centroids_batch(self, image, coords_rc, window=5, iterations=2):
         """
@@ -4040,8 +4112,21 @@ class AtomMarkerApp:
         # Never reuse a previous analysis result if this run fails validation.
         self._clear_analysis_results()
 
+        # 阈值先校验：NaN/inf 会让"condition > max_condition"恒为 False 而静默
+        # 绕过全部病态基矢检查；0/负值会把一切合法基矢判为病态。两者都必须在
+        # 任何计算（含参考区精化）之前给出清晰错误。
         try:
-            validate_reference_lattice(a_vec, b_vec)
+            lattice_max_condition = validate_max_condition(
+                self.lattice_max_condition, label="lattice_max_condition")
+        except AnalysisError as error:
+            messagebox.showerror("阈值无效", f"晶格条件数阈值无效：\n{error}")
+            self.status.config(text="错误: 晶格条件数阈值无效")
+            return
+        self.lattice_max_condition = lattice_max_condition
+
+        try:
+            validate_reference_lattice(a_vec, b_vec,
+                                       max_condition=lattice_max_condition)
         except (np.linalg.LinAlgError, AnalysisError) as error:
             messagebox.showerror("错误", f"参考晶格无效：\n{error}")
             self.status.config(text="错误: 参考晶格无效")
@@ -4057,7 +4142,8 @@ class AtomMarkerApp:
         r_origin, r_a, r_b = origin, a_vec, b_vec
         if region_mask is not None:
             r_origin, r_a, r_b, refine_applied, n_ref_used = refine_lattice_basis_in_region(
-                pts, origin, a_vec, b_vec, region_mask)
+                pts, origin, a_vec, b_vec, region_mask,
+                max_condition=lattice_max_condition)
             if refine_applied:
                 da_pct = np.linalg.norm(r_a - a_vec) / max(np.linalg.norm(a_vec), 1e-12) * 100
                 db_pct = np.linalg.norm(r_b - b_vec) / max(np.linalg.norm(b_vec), 1e-12) * 100
@@ -4069,7 +4155,8 @@ class AtomMarkerApp:
             return
         # ---- 全局一对一晶格分配: 每个用户确认点都保留并参与位移分析 ----
         try:
-            assignment = assign_unique_lattice_indices(pts, r_origin, r_a, r_b)
+            assignment = assign_unique_lattice_indices(
+                pts, r_origin, r_a, r_b, max_condition=lattice_max_condition)
         except (AnalysisError, ValueError) as error:
             messagebox.showerror("晶格索引分配失败", str(error))
             self.status.config(text=f"错误: 晶格索引分配失败 ({error})")
@@ -4132,6 +4219,9 @@ class AtomMarkerApp:
             von_mises_coeff=float(self.von_mises_coeff),
             analysis_method=str(self.analysis_method),
             image_shape=(int(self.image.shape[0]), int(self.image.shape[1])),
+            # 与参考晶格校验、索引分配共用同一阈值快照：worker 里不得再读实例
+            # 状态，也不得回落到隐藏默认 30，否则用户放宽的阈值会被静默挡下。
+            lattice_max_condition=float(lattice_max_condition),
         )
 
         def _run():
@@ -4146,7 +4236,8 @@ class AtomMarkerApp:
                              displacements, r_origin, r_a, r_b, n_pts,
                              refine_applied, da_pct, db_pct, n_ref_used, n_bad,
                              n_conflicts, n_reassigned, von_mises_coeff,
-                             analysis_method, image_shape):
+                             analysis_method, image_shape,
+                             lattice_max_condition=None):
         """Heavy, Tk-free half of ``run_ppa_analysis``.
 
         只读传入参数, 不读写可变实例状态; 全部结果放入 queue payload, 由
@@ -4179,11 +4270,17 @@ class AtomMarkerApp:
             return
         try:
             if analysis_method == "peak_pairs":
+                local_kwargs = {"equivalent_coefficient": von_mises_coeff}
+                if lattice_max_condition is not None:
+                    # 与 validate_reference_lattice 共用同一阈值：此前局部 PPA
+                    # 硬编码 30，用户按 LATTICE_CONDITION_GUIDANCE 放宽参考晶格
+                    # 阈值后，局部路径仍按 30 拒绝且无提示。
+                    local_kwargs["max_condition"] = lattice_max_condition
                 result = compute_local_peak_pair_strain(
                     lattice_indices,
                     matched_ideal * np.array([1.0, -1.0]),
                     pts * np.array([1.0, -1.0]),
-                    equivalent_coefficient=von_mises_coeff)
+                    **local_kwargs)
                 strain_fields = _strain_fields_from_result(result, "sites", matched_ideal)
                 invalid_mask = ~np.asarray(result.quality_mask, dtype=bool)
                 invalid_sites = pts[invalid_mask] if np.any(invalid_mask) else None
@@ -5083,6 +5180,8 @@ class AtomMarkerApp:
             'detect_params': {
                 'sigma': self.detect_sigma, 'min_dist': self.detect_min_dist,
                 'window': self.detect_window, 'method': self.centroid_method,
+                # 工单27: 高斯精炼回退比例入档, 便于追溯坐标质量
+                'gaussian_fallback': getattr(self, 'last_gaussian_refine_stats', None),
             },
             # 预处理设置一并存档, 否则加载后无法复现"用预处理图检测"的流程
             'preprocess': {
@@ -5205,11 +5304,25 @@ class AtomMarkerApp:
         self.detect_min_dist = float(params.get('min_dist', self.detect_min_dist))
         self.detect_window = int(params.get('window', self.detect_window))
         self.centroid_method = params.get('method', self.centroid_method)
+        # 工单27: 恢复高斯精炼回退统计 (旧项目文件无此键 -> 保持 None)
+        fallback_stats = params.get('gaussian_fallback')
+        if isinstance(fallback_stats, dict) and \
+                {'n_points', 'n_fallback', 'fallback_ratio'} <= set(fallback_stats):
+            self.last_gaussian_refine_stats = {
+                'n_points': int(fallback_stats['n_points']),
+                'n_fallback': int(fallback_stats['n_fallback']),
+                'fallback_ratio': float(fallback_stats['fallback_ratio']),
+            }
+        else:
+            self.last_gaussian_refine_stats = None
         reference = data.get('reference')
         self.reference_metadata = None
         if reference:
             try:
-                validate_reference_lattice(reference['a_vec'], reference['b_vec'])
+                # 项目里的参考晶格也必须按当前阈值校验，否则加载时会被隐藏默认
+                # 30 拒绝（用户放宽后保存的项目无法恢复）。
+                validate_reference_lattice(reference['a_vec'], reference['b_vec'],
+                                           max_condition=self.lattice_max_condition)
                 self.reference_vecs = (np.asarray(reference['a_vec'], dtype=float), np.asarray(reference['b_vec'], dtype=float))
                 self.ref_origin = np.asarray(reference['origin'], dtype=float)
                 estimation = reference.get('estimation')

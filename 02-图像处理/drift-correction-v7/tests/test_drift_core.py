@@ -36,6 +36,16 @@ from drift_core import (
     write_shift_table,
 )
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -749,6 +759,183 @@ class DriftCoreTests(unittest.TestCase):
         memory = total_physical_memory()
         if memory is not None:
             self.assertGreater(memory, 1024 ** 3)
+
+
+class CompressionOptionTests(unittest.TestCase):
+    """write_stack/correct_and_save 的可选 compression（回归 2026-10-03）。
+
+    默认 None/"none" 必须与历史行为逐位一致；"deflate" 只改容器编码，
+    且**不得**绕过任何安全检查（同源、已有目标、失败清理、元数据、校验）。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        rng = np.random.default_rng(11)
+        self.frames = [rng.integers(0, 255, (24, 24), dtype=np.uint8) for _ in range(3)]
+        self.meta = {"dtype": np.dtype(np.uint8), "shape": (24, 24), "n_frames": 3,
+                     "imagej": True}
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _read(self, path):
+        with tifffile.TiffFile(path) as tif:
+            return tif.asarray(), str(tif.pages[0].compression.name), tif
+
+    def test_default_is_identical_to_explicit_none(self):
+        """省略参数与显式 none 必须产出相同像素与相同编码。"""
+        default_path = self.root / "default.tif"
+        none_path = self.root / "explicit-none.tif"
+        TiffIO.write_stack(str(default_path), iter(self.frames), dict(self.meta))
+        TiffIO.write_stack(str(none_path), iter(self.frames), dict(self.meta),
+                           compression="none")
+        a, comp_a, _ = self._read(default_path)
+        b, comp_b, _ = self._read(none_path)
+        self.assertEqual(comp_a, "NONE")
+        self.assertEqual(comp_b, "NONE")
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_deflate_is_lossless_and_uses_deflate(self):
+        none_path = self.root / "none.tif"
+        deflate_path = self.root / "deflate.tif"
+        TiffIO.write_stack(str(none_path), iter(self.frames), dict(self.meta))
+        TiffIO.write_stack(str(deflate_path), iter(self.frames), dict(self.meta),
+                           compression="deflate")
+        a, comp_a, _ = self._read(none_path)
+        b, comp_b, _ = self._read(deflate_path)
+        self.assertEqual(comp_a, "NONE")
+        self.assertEqual(comp_b, "DEFLATE")
+        self.assertTrue(np.array_equal(a, b), "deflate 必须无损")
+
+    def test_deflate_shrinks_compressible_data(self):
+        """真实显微图（大片平滑区域）应显著变小；随机噪声不保证，故单独测。"""
+        smooth = [np.tile(np.arange(64, dtype=np.uint8), (64, 1)) for _ in range(4)]
+        meta = {"dtype": np.dtype(np.uint8), "shape": (64, 64), "n_frames": 4}
+        none_path = self.root / "smooth-none.tif"
+        deflate_path = self.root / "smooth-deflate.tif"
+        TiffIO.write_stack(str(none_path), iter(smooth), dict(meta))
+        TiffIO.write_stack(str(deflate_path), iter(smooth), dict(meta),
+                           compression="deflate")
+        self.assertLess(deflate_path.stat().st_size, none_path.stat().st_size)
+        a, _, _ = self._read(none_path)
+        b, comp_b, _ = self._read(deflate_path)
+        self.assertEqual(comp_b, "DEFLATE")
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_unknown_compression_rejected(self):
+        with self.assertRaises(ValueError):
+            TiffIO.write_stack(str(self.root / "x.tif"), iter(self.frames),
+                               dict(self.meta), compression="lzma")
+
+    def test_safety_checks_apply_to_both_encodings(self):
+        """同源拒绝与已有目标拒绝对两种编码都生效。"""
+        for mode in (None, "none", "deflate"):
+            with self.subTest(mode=mode):
+                existing = self.root / f"{mode}-existing.tif"
+                existing.write_bytes(b"KEEP")
+                with self.assertRaises(FileExistsError):
+                    TiffIO.write_stack(str(existing), iter(self.frames),
+                                       dict(self.meta), compression=mode)
+                self.assertEqual(existing.read_bytes(), b"KEEP")
+
+                same = self.root / f"{mode}-same.tif"
+                same.write_bytes(b"SOURCE")
+                with self.assertRaises(ValueError):
+                    TiffIO.write_stack(str(same), iter(self.frames),
+                                       {**self.meta, "source_path": str(same)},
+                                       compression=mode)
+                self.assertEqual(same.read_bytes(), b"SOURCE")
+
+    def test_failed_write_leaves_no_final_or_temp(self):
+        """中途失败：不得留下最终文件，也不得留下临时 .part 残留。"""
+        for mode in (None, "none", "deflate"):
+            with self.subTest(mode=mode):
+                target = self.root / f"{mode}-partial.tif"
+                original = tifffile.TiffWriter.write
+                calls = [0]
+
+                def fail_second(self_writer, *pos, **kw):
+                    calls[0] += 1
+                    if calls[0] == 2:
+                        raise OSError("SYNTHETIC_WRITE_FAILURE")
+                    return original(self_writer, *pos, **kw)
+
+                with mock.patch.object(tifffile.TiffWriter, "write", fail_second):
+                    with self.assertRaises(OSError):
+                        TiffIO.write_stack(str(target), iter(self.frames),
+                                           dict(self.meta), compression=mode)
+                self.assertFalse(target.exists())
+                self.assertEqual(list(self.root.glob("*.part.tif")), [])
+
+    def test_correct_and_save_compression_preserves_pixels_and_metadata(self):
+        """correct_and_save 两种编码：像素一致、裁剪一致、resolution 保留。"""
+        frames = [np.tile(np.arange(24, dtype=np.uint8), (24, 1)) + i for i in range(3)]
+        shifts_x, shifts_y = [0.0, 3.0, 6.0], [0.0, 0.0, 0.0]
+        results = {}
+        for mode in ("none", "deflate"):
+            meta = {**self.meta, "resolution": (25.0, 25.0),
+                    "resolutionunit": "CENTIMETER"}
+            target = self.root / f"corrected-{mode}.tif"
+            written = correct_and_save(frames, shifts_x, shifts_y, meta, str(target),
+                                       overwrite=False, crop_mode="crop",
+                                       compression=mode)
+            self.assertEqual(written, 3)
+            array, compression, tif = self._read(target)
+            with tifffile.TiffFile(target) as handle:
+                self.assertEqual(handle.imagej_metadata.get("frames"), 3)
+                self.assertIsNotNone(handle.pages[0].tags.get("XResolution"))
+            results[mode] = (array, compression)
+        self.assertEqual(results["none"][1], "NONE")
+        self.assertEqual(results["deflate"][1], "DEFLATE")
+        self.assertTrue(np.array_equal(results["none"][0], results["deflate"][0]))
+        self.assertEqual(results["none"][0].shape[1:], (24, 18),
+                         "共同有效区裁剪应与编码无关")
+
+    def test_correct_and_save_verification_still_runs_with_deflate(self):
+        """deflate 也必须执行"矫正生效"校验（verify_info 被回填即证明走过该分支）。"""
+        rng = np.random.default_rng(3)
+        frames = [rng.integers(0, 255, (32, 32), dtype=np.uint8) for _ in range(3)]
+        target = self.root / "verify-deflate.tif"
+        verify: dict = {}
+        written = correct_and_save(frames, [0.0, 4.0, 8.0], [0.0, 0.0, 0.0],
+                                   dict(self.meta), str(target), crop_mode="keep",
+                                   compression="deflate", verify_info=verify)
+        self.assertEqual(written, 3)
+        self.assertEqual(verify.get("verify_index"), 2, "生效校验未在最大位移帧执行")
+        self.assertIsNotNone(verify.get("changed_ratio"))
+        self.assertGreater(verify["changed_ratio"], 0.0)
+        # 两种编码的生效校验结果必须一致
+        none_target = self.root / "verify-none.tif"
+        verify_none: dict = {}
+        correct_and_save(frames, [0.0, 4.0, 8.0], [0.0, 0.0, 0.0], dict(self.meta),
+                         str(none_target), crop_mode="keep", compression="none",
+                         verify_info=verify_none)
+        self.assertEqual(verify_none["verify_index"], verify["verify_index"])
+        self.assertAlmostEqual(verify_none["changed_ratio"], verify["changed_ratio"])
+
+    def test_correct_and_save_verification_blocks_noop_with_deflate(self):
+        """位移非零但像素完全未变时必须拒绝 —— deflate 也不例外。
+
+        直接给非零位移而让矫正"无效"：用整数位移 + 完全均匀的图，
+        warpAffine 的边界填充值设为图内值即可得到逐像素相同的"矫正"结果。
+        """
+        uniform = np.full((32, 32), 7, dtype=np.uint8)
+        frames = [uniform.copy(), uniform.copy()]
+        target = self.root / "noop-deflate.tif"
+        # 非零位移（> VERIFY_MIN_SHIFT_MAGNITUDE）才会触发生效校验；
+        # 这里断言 deflate 路径确实走了该校验（而不是被压缩分支跳过）。
+        called = []
+        original_equal = np.array_equal
+
+        def spy(a, b, *pos, **kw):
+            called.append(True)
+            return original_equal(a, b, *pos, **kw)
+
+        with mock.patch("drift_core.np.array_equal", side_effect=spy):
+            correct_and_save(frames, [0.0, 5.0], [0.0, 0.0], dict(self.meta),
+                             str(target), crop_mode="keep", compression="deflate")
+        self.assertTrue(called, "deflate 路径未执行矫正生效校验")
 
 
 if __name__ == "__main__":

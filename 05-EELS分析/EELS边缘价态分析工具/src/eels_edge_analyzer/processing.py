@@ -12,7 +12,14 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.signal import savgol_filter
 
-from .models import AnalysisCancelled, BoundaryResult, CancelCallback, DistanceBin
+from .models import (
+    AnalysisCancelled,
+    BoundaryResult,
+    CancelCallback,
+    DistanceBin,
+    validate_paired_energy_axes,
+    validate_single_energy_axis,
+)
 
 # 区域谱预边基线窗口与边信号窗口的宽度（eV）。隐含假设 fit_min_ev 位于边 onset 之前。
 PREEEDGE_BASELINE_WINDOW_EV = 3.0
@@ -101,6 +108,7 @@ def fourier_ratio_deconvolution_multi(
     baseline_range_ev: tuple[float, float],
     zlp_window_ev: tuple[float, float],
     *,
+    high_energy_ev: np.ndarray | None = None,
     chunk_rows: int = 8,
     cancel: CancelCallback | None = None,
     pixel_indices: np.ndarray | None = None,
@@ -117,9 +125,30 @@ def fourier_ratio_deconvolution_multi(
 
     实测说明：逐像素循环的 32 KB 工作集常驻缓存，比按列批量的 FFT 实现
     更快，因此这里保留逐像素核心；性能收益来自子集路径而非批量 FFT。
+
+    ``high_energy_ev``（2026-10-03 R1 新增，键字可选）
+    --------------------------------------------------
+    传入时会先调用 :func:`eels_edge_analyzer.models.validate_paired_energy_axes`
+    校验低/高损能量色散一致。**不传时只保证低损轴自身合法**——本函数无法
+    得知高损能量栅格，因此不声称做过配对检查；调用方若要拿到配对保证，必须
+    显式传入高损能量轴（``pipeline.run_analysis`` 已传）。
+
+    无论是否传入高损轴，低损轴都会经
+    :func:`eels_edge_analyzer.models.validate_single_energy_axis` 校验
+    （一维、长度 ≥ 2、有限、严格递增、自身均匀），且**每条传入的轴长度都必须
+    等于 SI 的第一维**——否则后续布尔索引会抛出难以定位的 IndexError。
+
+    Raises:
+        ValueError: 形状不合法、能量轴与 SI 通道数不符，或传入高损能量轴但
+            两轴无法配对。
     """
 
     regs = tuple(sorted({float(value) for value in regularizations}))
+    if high_energy_ev is not None:
+        validate_paired_energy_axes(low_energy_ev, high_energy_ev)
+    else:
+        # 兑现"不传时只保证低损轴自身合法"的承诺：低损轴同样做完整单轴校验。
+        validate_single_energy_axis(low_energy_ev, "低损对象")
     if not regs:
         raise ValueError("至少需要一个去卷积正则化参数。")
     if any(value <= 0 for value in regs):
@@ -131,6 +160,17 @@ def fourier_ratio_deconvolution_multi(
         )
     if high_loss.ndim != 3:
         raise ValueError("EELS SI 必须是 (energy, y, x) 三维数组。")
+    # 轴长度必须与 SI 第一维一致：两条轴彼此等长但与数据不符时，后续
+    # boolean 掩膜会抛出晦涩的 IndexError，这里提前给出可诊断的错误。
+    n_energy = high_loss.shape[0]
+    for axis, role in ((low_energy_ev, "低损对象"),
+                       (high_energy_ev, "高损对象")):
+        if axis is None:
+            continue
+        if np.asarray(axis).size != n_energy:
+            raise ValueError(
+                f"{role}的能量轴长度（{np.asarray(axis).size}）与 SI 能量通道数"
+                f"（{n_energy}）不一致，无法逐通道配对。")
     baseline_mask = (low_energy_ev >= baseline_range_ev[0]) & (low_energy_ev <= baseline_range_ev[1])
     zero_window = (low_energy_ev >= zlp_window_ev[0]) & (low_energy_ev <= zlp_window_ev[1])
     if not baseline_mask.any() or not zero_window.any():
@@ -230,6 +270,7 @@ def fourier_ratio_deconvolution(
     baseline_range_ev: tuple[float, float],
     zlp_window_ev: tuple[float, float],
     *,
+    high_energy_ev: np.ndarray | None = None,
     chunk_rows: int = 8,
     cancel: CancelCallback | None = None,
     pixel_indices: np.ndarray | None = None,
@@ -238,6 +279,9 @@ def fourier_ratio_deconvolution(
 
     单正则化便捷封装；实现共享 :func:`fourier_ratio_deconvolution_multi`
     的逐像素核心，诊断键与旧版保持兼容。
+
+    ``high_energy_ev`` 键字可选（2026-10-03 R1）：传入时校验低/高损色散一致；
+    **不传时只保证低损轴合法，不保证已做过配对检查**。
     """
 
     reg = float(regularization)
@@ -248,6 +292,7 @@ def fourier_ratio_deconvolution(
         (reg,),
         baseline_range_ev,
         zlp_window_ev,
+        high_energy_ev=high_energy_ev,
         chunk_rows=chunk_rows,
         cancel=cancel,
         pixel_indices=pixel_indices,

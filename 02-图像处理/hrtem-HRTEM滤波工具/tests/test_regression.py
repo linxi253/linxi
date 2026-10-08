@@ -6,10 +6,24 @@ import numpy as np
 
 from hrtem_filter import FilterParams, HRTEMFilter
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class RegressionTests(unittest.TestCase):
     def test_default_fast_mode_golden_samples(self) -> None:
-        """Protect the validated v5 default against accidental algorithm drift."""
+        """Protect the validated v5 default against accidental algorithm drift.
+
+        金标由当前实现生成，只用于防止算法漂移，不构成与历史 v4 版本
+        一致性的证明（v4 归档未随本仓库分发，见 README）。
+        """
         image = np.random.default_rng(2026).normal(size=(128, 128)).astype(np.float32)
         output = HRTEMFilter().process_image(image, FilterParams()).primary
         expected = {
@@ -27,7 +41,10 @@ class RegressionTests(unittest.TestCase):
         np.testing.assert_allclose(float(output.std()), 0.20225593, rtol=5e-4)
 
     def test_dm_compatible_golden_samples(self) -> None:
-        """Protect the dm_compatible sampling path against accidental drift."""
+        """Protect the dm_compatible sampling path against accidental drift.
+
+        金标由当前实现生成，只用于防止算法漂移，不作为正确性证明。
+        """
         image = np.random.default_rng(2026).normal(size=(128, 128)).astype(np.float32)
         output = HRTEMFilter().process_image(
             image, FilterParams(rotation_method="dm_compatible")

@@ -12,7 +12,8 @@ dependencies = [
   "scipy>=1.10,<2",
   "matplotlib>=3.7,<4",
   "tifffile>=2023.0",
-  "pillow>=9,<12",
+  "pillow>=9",
+  "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

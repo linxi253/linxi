@@ -1,6 +1,15 @@
 """Legacy training entry: the supported workflow lives in the atom-center package."""
 import sys
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 MESSAGE = """
 旧训练入口已迁移到“原子中心识别模型开发”，避免未经审计的数据和全局 best.pt 覆盖。
 请使用该项目的 Python 环境：

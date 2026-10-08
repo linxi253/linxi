@@ -17,6 +17,16 @@ from atom_center.metrics import match_points
 from atom_center.source_identity import verify_source
 from atom_center.storage import read_json, write_json, new_artifact_directory
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -138,7 +148,7 @@ def main():
                   'test_is_blind':False,'assumption':'exported detection rectangle represents fully checked coverage',
                   'input_files_unchanged':True,'input_sha256':hashes,'rows':rows,'totals':totals,
                   'missing_coordinate_answers':['03: marked image/stack only, no coordinate CSV','06: Untitled1.tif answer not found'],
-                  'limitations':['Two files may share a field and are not independent acquisitions.','ROI-only rerun is a diagnostic, not the original preview performance.','User confirmed full manual review for 05 despite automatic generator provenance.']})
+                  'limitations':['Two files may share a field and are not independent acquisitions.','ROI-only rerun is a diagnostic, not the original preview performance.']})
         # Inspectable notebook executes this exact reusable script with a fresh output directory.
         write_json(out/'reproduce.ipynb',{'nbformat':4,'nbformat_minor':5,'metadata':{'kernelspec':{'display_name':'Python 3','language':'python','name':'python3'}},
                    'cells':[{'cell_type':'markdown','metadata':{},'source':['# 人工参考答案核对\n','主指标读取答案提供前保存的固定预测；选区推理只作诊断。05 已获用户确认完整人工检查。\n']},

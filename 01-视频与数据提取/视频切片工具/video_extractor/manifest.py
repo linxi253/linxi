@@ -43,7 +43,9 @@ def write_frame_manifest(
     用于把归零时间轴映射回容器时间。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
+    # utf-8-sig：含中文路径的清单在 Excel 中直接打开不乱码（与其他工具一致）。
+    # 读取端（含 10-DSH集成 流水线）必须用 utf-8-sig，否则首列键名会带 BOM 前缀。
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[

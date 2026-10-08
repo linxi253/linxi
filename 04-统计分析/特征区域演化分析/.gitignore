@@ -1,31 +1,4 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# PyInstaller 构建产物
-build/
-dist/
-*.manifest
+# 本目录特有规则；通用 Python/构建/媒体忽略规则见仓库根 .gitignore。
 
 # 分析输出目录（在输入文件旁生成，通常不在项目内，保险起见排除）
 NatureStyle_Analysis_*/
-
-# 测试数据（大文件）
-*.tif
-*.tiff
-
-# IDE
-.idea/
-.vscode/
-
-# ZCode 会话目录
-.zcode/
-
-# 系统文件
-Thumbs.db
-Desktop.ini
-
-# pytest 缓存
-.pytest_cache/

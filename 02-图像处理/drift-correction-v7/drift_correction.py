@@ -24,6 +24,7 @@ v7 合并摘要:
   持久化
 """
 
+import contextlib
 import os
 import sys
 import glob
@@ -37,6 +38,15 @@ import numpy as np
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -1203,11 +1213,22 @@ class DriftCorrectionApp:
             # 60 秒超时后必须给用户强制退出选项，不能无限轮询挂起。
             if not self._close_force_prompted:
                 self._close_force_prompted = True
+                # 宿主能力必须在 destroy() **之前**读取：destroy 之后就问不到了。
+                embedded = self._embedded_in_suite()
                 if messagebox.askyesno(
                         "强制退出",
-                        "任务未在60秒内结束。\n\n强制退出会直接关闭窗口；"
-                        "已有输出文件不会被破坏，本次临时文件可能残留。\n是否强制退出？"):
+                        "任务未在60秒内结束。\n\n"
+                        + ("强制关闭将只关闭本标签页；后台任务无法安全终止，"
+                           "本次临时文件可能残留。\n是否强制关闭？"
+                           if embedded else
+                           "强制退出会直接关闭窗口；已有输出文件不会被破坏，"
+                           "本次临时文件可能残留。\n是否强制退出？")):
                     self.root.destroy()
+                    if embedded:
+                        # 内嵌在 TEM Suite 中：本工具只是标签页之一，
+                        # os._exit 会连带杀掉其他已打开工具并截断它们正在
+                        # 写出的文件，因此绝不能结束整个进程。
+                        return
                     # worker 是非 daemon 线程，仅 destroy 会让解释器一直等它
                     # 结束（窗口已消失但进程残留）；此刻写入方对临时文件已有
                     # 自清理保证，直接结束进程。
@@ -1218,6 +1239,26 @@ class DriftCorrectionApp:
             self.root.after(50, self._finish_close)
             return
         self.root.destroy()
+
+    def _embedded_in_suite(self) -> bool:
+        """本窗口是否被 TEM Suite 以标签页方式内嵌。
+
+        依据**宿主自己声明的能力**判断，而不是 ``tk._default_root`` 的类名 ——
+        Suite 的 Tk 重定向只是让工具拿到 ToolHost，真实默认 root 仍是 Tk/Window，
+        用类名判断会得到错误结论（回归 2026-10-03 R3）。
+        """
+        root = self.root
+        can_terminate = getattr(root, "can_terminate_process", None)
+        if callable(can_terminate):
+            with contextlib.suppress(Exception):
+                return not bool(can_terminate())
+        if getattr(root, "embedded_in_suite", False):
+            return True
+        is_embedded = getattr(root, "is_embedded", None)
+        if callable(is_embedded):
+            with contextlib.suppress(Exception):
+                return bool(is_embedded())
+        return False
 
     # --------------------------------------------------------
     # 漂移检测（后台线程）

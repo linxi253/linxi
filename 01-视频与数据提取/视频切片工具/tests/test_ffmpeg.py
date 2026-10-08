@@ -48,7 +48,7 @@ def _valid_probe_payload() -> bytes:
             }
         ],
         "format": {
-            "filename": "H:/显微视频/样品.mp4",
+            "filename": "样品.mp4",
             "duration": "2.0",
         },
     }
@@ -64,7 +64,7 @@ def test_probe_video_captures_utf8_json_in_binary_mode(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(ffmpeg_module.subprocess, "Popen", fake_popen)
 
-    info = probe_video(Path("ffprobe"), Path("H:/显微视频/样品.mp4"))
+    info = probe_video(Path("ffprobe"), Path("样品.mp4"))
 
     assert "text" not in popen_kwargs
     assert "encoding" not in popen_kwargs
@@ -247,6 +247,29 @@ def test_probe_video_ordinal_counts_attached_pictures(monkeypatch: pytest.Monkey
     assert info.stream_count == 1
     assert info.stream_index == 1
     assert info.video_stream_ordinal == 1
+
+
+def test_probe_video_counts_multiple_usable_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """多视频流（含封面）：stream_count 只计可用流，首流选择不受收集影响。"""
+    payload = {
+        "streams": [
+            {"index": 0, "codec_type": "video", "width": 8, "height": 8,
+             "avg_frame_rate": "1/1", "r_frame_rate": "1/1", "pix_fmt": "yuv420p",
+             "disposition": {"attached_pic": 1}},
+            {"index": 1, "codec_type": "video", "width": 64, "height": 48,
+             "avg_frame_rate": "30/1", "r_frame_rate": "30/1", "pix_fmt": "yuv420p"},
+            {"index": 2, "codec_type": "video", "width": 32, "height": 24,
+             "avg_frame_rate": "15/1", "r_frame_rate": "15/1", "pix_fmt": "yuv420p"},
+        ],
+    }
+    _probe_popen_with_payload(monkeypatch, json.dumps(payload).encode("utf-8"))
+    info = probe_video(Path("ffprobe"), Path("multi_stream.mkv"))
+    assert info.stream_count == 2
+    # 首选流仍是第一个非封面流（解码语义保持不变）
+    assert info.stream_index == 1
+    assert info.video_stream_ordinal == 1
+    assert info.width == 64
+    assert info.height == 48
 
 
 def test_probe_first_frame_pts_parses_first_line(monkeypatch: pytest.MonkeyPatch) -> None:

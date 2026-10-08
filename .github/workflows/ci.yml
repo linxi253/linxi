@@ -17,27 +17,56 @@ jobs:
     name: lint & compile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # 审计条目 95：第三方 action 一律按 commit SHA 固定（配 Dependabot 更新），
+      # 上游移动标签不再能改写 CI 行为。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 
       - name: Install ruff
-        run: python -m pip install --upgrade pip ruff
+        # 审计条目 98：ruff 按精确版本固定（0.16.10，2026-10-02 PyPI/清华镜像
+        # 实测最新），避免上游发版悄然改变 lint 结果；pip 本身保持升级。
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff==0.16.10
 
       - name: Ruff lint
-        # 只挑「真错误」：E9 语法/运行时、F63 无效 __all__、F7 类型注释语法、F82 未定义名。
-        # 不跑 ruff 默认全量规则集：各子项目自带 [tool.ruff] 配置，全量会累计数千条既有
-        # 风格告警（UP006/I001/BLE001…），不适合在引入 CI 的第一步就全部卡红。
+        # 只挑「真错误」：E9 语法/运行时；F63 值比较/断言类错误（F631 对非空
+        # 元组断言、F632 与 str/bytes/int 字面量做 is 比较、F633 Py2 风格
+        # `print >>` 语句——审计工单 132 更正：与 __all__ 无关，__all__ 相关
+        # 的未定义名属 F822）；F7 类型注释语法；F82 未定义名。
+        # 不跑 ruff 默认全量规则集：19 条矩阵腿中仅 5 个的 pyproject.toml 带
+        # [tool.ruff] 配置（drift-correction-v7、hrtem-HRTEM滤波工具、stem-optimize、
+        # EELS边缘价态分析、全整合），其余 14 个没有——全量规则下这些项目会按 ruff
+        # 默认值累计数千条既有风格告警（UP006/I001/BLE001…），不适合在引入 CI 的
+        # 第一步就全部卡红。
         #
         # 注意：ruff 会把 `x=1;match=y` 误判为 E999（把 match 当软关键字语句），这是 ruff
-        # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法。真语法错误由下面的
-        # compileall（CPython 解析器）兜底。
+        # 解析器缺陷，CPython 的 ast.parse/tokenize 判定其合法——因此不以 ruff 的
+        # E999 为准。它并不会「兜底」ruff 的结果（审计工单 98 更正：compileall 是
+        # 与本步骤互不读取输出的独立后续步骤），但真正的语法错误仍会在那条独立
+        # 步骤里被 CPython 解析器捕获，不会漏过 CI。
         run: ruff check --select E9,F63,F7,F82 --output-format=github .
 
       - name: Compile all sources
-        run: python -m compileall -q -x '(^|/)(\.venv|build|dist|release|legacy|wheelhouse)/' .
+        # 审计条目 97：排除集与根 .gitignore 的目录类规则对齐（venv 系/build 系/
+        # dist 系/release/wheelhouse/legacy/运行期输出目录/*egg-info/__pycache__），
+        # 并用 [/\\] 同时兼容 CI 的 POSIX 分隔符与本地 Windows 手跑时的反斜杠
+        # （旧模式写死 `/`，在 Windows 上排除完全失效）。
+        run: >-
+          python -m compileall -q -x
+          '(^|[/\\])(\.venv[^/\\]*|venv|env|build(-[^/\\]*)?|dist(-[^/\\]*)?|release|wheelhouse|legacy|outputs?|results|runs|[^/\\]*\.egg-info|__pycache__)([/\\]|$)'
+          .
+
+      # 工单127/S1a(R7)：CI 矩阵与 .tools 契约收敛为单一来源。除 CI 无法在运行时
+      # 推导的字段（显示名、目录、解释器版本、是否需要 FFmpeg）外，安装源、
+      # editable、额外测试依赖与测试命令都由 .tools/ci-project.py 从
+      # .tools/projects.json 解析；因此这里重复声明这些字段反而是错误，
+      # 守卫会直接报 MISMATCH（如 tests 改了而 ci.test 没改）。
+      - name: Guard ci.yml matrix <-> .tools project contract
+        run: python .tools/verify-envs.py --check-matrix .github/workflows/ci.yml
 
   # ---------------------------------------------------------------------------
   # 逐子项目测试。跑在 Windows 上：这些工具是 Windows 桌面 GUI 程序，测试套件
@@ -47,86 +76,200 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: windows-latest
+    # Windows 默认 stdout 编码是 cp1252（charmap）。仓库里多处工具会打印含中文的
+    # 路径/目录名（例如 ci-project.py 打印 entry['dir']、verify_ffmpeg_asset.py
+    # 打印资产目录），父进程自身在 cp1252 下 print 就会 UnicodeEncodeError。
+    # 在 job 级设置这两个变量，使该 job 的**所有** Python 父/子进程都拿到确定的
+    # UTF-8 stdout；子进程另有 _envcommon 的 setdefault 兜底，二者一致。
+    # 这不是逐机 monkeypatch，也不改变任何安装/测试/校验行为。
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
     strategy:
       fail-fast: false
       matrix:
+        # S1a(R7)：这里只保留 CI 无法在运行时推导的字段——显示名、目录、
+        # 解释器版本、(视频工具的) FFmpeg 需求。安装源、editable、额外测试
+        # 依赖与测试命令一律由 .tools/projects.json 决定，并由
+        # .tools/ci-project.py 执行；因此**不得**在本矩阵里重复声明它们，
+        # 否则 .tools/verify-envs.py --check-matrix 会直接报 MISMATCH
+        # （这正是「tests 改了而 ci.test 没改」这类漂移的守门方式）。
         include:
-          - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true }
-          - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7' }
-          - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具' }
-          # 该项目的锁文件是 Windows + CPython 3.10 + --require-hashes，必须用 3.10
+          # requires-python = ">=3.11,<3.14"，其 .venv/锁在 Python 3.12.14 上验证
+          # （见 环境隔离说明.md），故 py: '3.12'；其余项目的锁头部均标注按
+          # Python 3.10（多数 3.10.9）生成，stem-optimize 的锁名与头部为
+          # Windows/CPython 3.10 且带 --require-hashes，原子中心 pyproject 为
+          # >=3.10,<3.11，都必须在 3.10 下运行。
+          - { name: '01 视频切片工具',      dir: '01-视频与数据提取/视频切片工具',  ffmpeg: true, py: '3.12' }
+          # 10-DSH集成 复用视频切片工具与 drift-correction-v7 的源码（sys.path 注入），
+          # 完整链要用 FFmpeg 造合成视频，因此同样需要 py 3.12 与 ffmpeg: true。
+          - { name: '10 TEM 视频流水线',    dir: '10-DSH集成', ffmpeg: true, py: '3.12' }
+          - { name: '02 TIFF 漂移矫正 v7', dir: '02-图像处理/drift-correction-v7', py: '3.10' }
+          - { name: '02 HRTEM/STEM 滤波',  dir: '02-图像处理/hrtem-HRTEM滤波工具', py: '3.10' }
           - { name: '02 STEM 图像优化',    dir: '02-图像处理/stem-optimize-STEM图像优化', py: '3.10' }
-          - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具' }
-          - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具' }
-          - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析' }
-          # 测试导入 yaml，但依赖清单未声明 pyyaml（见下方 "Known gaps"）
-          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', deps: 'pyyaml' }
-          - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法' }
-          - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计' }
-          - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析' }
-          - { name: '04 统计面积',         dir: '04-统计分析/统计面积' }
-          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计/pythonProject' }
-          - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor' }
-          - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具' }
-          - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟' }
-          # tests/ 下是脚本式自检（README 记录 `python tests/verify_physics.py`），
-          # 函数靠返回值串联，pytest 无法收集（会报 fixture 'pl' not found）
-          - { name: '010 STEM 模拟',      dir: '010-STEM模拟', test: 'python tests/verify_physics.py' }
-          - { name: '全整合 TEM Suite',    dir: '全整合', test: 'python tests/smoke_test.py' }
+          - { name: '02 图像加滤镜工具',    dir: '02-图像处理/图像加滤镜工具', py: '3.10' }
+          - { name: '02 离域效应去除',      dir: '02-图像处理/离域效应去除工具', py: '3.10' }
+          - { name: '03 Strain++ GPA',    dir: '03-应变分析/strainpp-GPA应变分析', py: '3.10' }
+          - { name: '03 PPA 原子级应力',   dir: '03-应变分析/原子级应力分析-PPA', py: '3.10' }
+          - { name: '03 原子识别纯算法',    dir: '03-应变分析/原子识别纯算法', py: '3.10' }
+          - { name: '03 原子中心识别模型开发', dir: '03-应变分析/原子中心识别模型开发', py: '3.10' }
+          - { name: '04 原子衬度统计',      dir: '04-统计分析/原子衬度统计', py: '3.10' }
+          - { name: '04 特征区域演化分析',   dir: '04-统计分析/特征区域演化分析', py: '3.10' }
+          - { name: '04 统计面积',         dir: '04-统计分析/统计面积', py: '3.10' }
+          - { name: '04 晶体/非晶区域统计', dir: '04-统计分析/非晶面积统计', py: '3.10' }
+          - { name: '05 4D-STEM Processor', dir: '05-4D-STEM分析/4D-STEM-Processor', py: '3.10' }
+          - { name: '05 EELS 边缘价态分析', dir: '05-EELS分析/EELS边缘价态分析工具', py: '3.10' }
+          - { name: '09 HRTEM 模拟',      dir: '09-HRTEM模拟', py: '3.10' }
+          - { name: '010 STEM 模拟',      dir: '010-STEM模拟', py: '3.10' }
+          - { name: '全整合 TEM Suite',    dir: '全整合', py: '3.10' }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (审计 95)
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: ${{ matrix.py || '3.12' }}
+          # 审计条目 46 / S1a(R4)：默认统一到 3.10，矩阵内仅视频切片工具需要 3.12
+          # （requires-python >=3.11,<3.14，上方显式 py: '3.12'）。各项目锁文件头部
+          # 标注按 Python 3.10（多数 3.10.9）生成；stem-optimize 的锁名与头部为
+          # Windows/CPython 3.10 且带 --require-hashes，原子中心 pyproject 为
+          # >=3.10,<3.11，均不可用 3.12。
+          python-version: ${{ matrix.py || '3.10' }}
           cache: pip
 
       - name: Provide FFmpeg 8.x (required by 视频切片工具, >= 8.0.3)
         if: matrix.ffmpeg
         shell: pwsh
+        env:
+          # 消费方目录：video_extractor.FFmpegManager 以其 __file__ 的上一级
+          # （即 01-视频与数据提取/视频切片工具）为根，查找 tools/ffmpeg/ffmpeg.exe。
+          # 10-DSH集成 的 pipeline 通过 sys.path 复用同一模块，因此两个 ffmpeg
+          # job（视频工具、pipeline）必须下载到**同一个**目录；把资产放进
+          # matrix.dir/tools/ffmpeg 会让 pipeline job 放错位置（它自己不会被
+          # FFmpegManager 看到），而 PATH 也没有加入该目录。
+          # 单一来源：这里只写一次，合同测试
+          # (.tools/tests/test_ci_contract.py) 校验它等于消费方模块所在目录。
+          FFMPEG_CONSUMER_DIR: 01-视频与数据提取/视频切片工具
         run: |
           $ErrorActionPreference = 'Stop'
-          # BtbN 的 latest 别名指向 8.1 系列，与 tools/ffmpeg/PROVENANCE.md 记录的主线一致
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip'
+          # 审计条目 63：CI 不得静默使用与 tools/ffmpeg/PROVENANCE.md 不一致的构建。
+          # 旧钉住的发布标签 autobuild-2026-08-21-13-40 已被上游删除（2026-10-02 实测
+          # 下载链接与 GitHub API 均返回 404）。
+          # 2026-10-02 曾临时重钉到 latest 别名；2026-10-08 复核发现 latest 已漂移
+          # （GitHub API 报出的归档 digest 与钉住值不同），因此改为钉住**固定发布标签**
+          # autobuild-2026-10-01-13-06 下的同一构建 n8.1.3-14-g330caae0c1-20261001。
+          # 固定标签同样可能被上游删除：本步骤对归档做 SHA-256 强校验，标签缺失或归档
+          # 变化都会显式失败，提示先核实该标签/构建是否仍可获取，再复核来源并重钉
+          # PROVENANCE.md（连同本地二进制与 build.ps1 的逐文件哈希），
+          # 杜绝「用漂移来的二进制跑测试却报绿」的供应链缺口。
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip'
+          # tools/ffmpeg/PROVENANCE.md 钉住的归档 SHA-256（与分发侧 build.ps1 同源）
+          $expected = 'bf545d8fee9bb6957c1f3dea0f384bf64edead407d763326dbbd2de1b04768a4'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
           Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $expected) {
+            throw ("下载的 FFmpeg 归档 SHA-256 为 $hash，与 tools/ffmpeg/PROVENANCE.md 钉住的构建" +
+                   "（$expected，n8.1.3-14-g330caae0c1-20261001）不一致——" +
+                   "请先核实固定发布标签 autobuild-2026-10-01-13-06 及其归档是否仍可获取" +
+                   "（标签可能已被上游删除，下载到 404/错误页也会走到这里），" +
+                   "再复核构建来源并同步更新 PROVENANCE.md（与本地 tools/ffmpeg、build.ps1 的" +
+                   "逐文件哈希一起），让 CI 与分发重新对齐后重跑。拒绝使用未校验的二进制。")
+          }
           $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
           Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
           $inner = Get-ChildItem $extract -Directory | Select-Object -First 1
-          $dest = Join-Path '${{ matrix.dir }}' 'tools/ffmpeg'
+          $dest = Join-Path '${{ github.workspace }}' (Join-Path $env:FFMPEG_CONSUMER_DIR 'tools/ffmpeg')
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item (Join-Path $inner.FullName 'bin/ffmpeg.exe') $dest -Force
           Copy-Item (Join-Path $inner.FullName 'bin/ffprobe.exe') $dest -Force
           Copy-Item (Join-Path $inner.FullName 'bin/*.dll') $dest -Force
+          # 两个 job 用同一目录：断言消费方模块确实会在此处解析到这对二进制。
+          python "${{ github.workspace }}/.tools/verify_ffmpeg_asset.py" --expect-dir $dest
           & (Join-Path $dest 'ffmpeg.exe') -version | Select-Object -First 1
 
-      - name: Install dependencies
-        working-directory: ${{ matrix.dir }}
+      # S1a(R6/R7)：安装不再由 ci.yml 自己"按文件名猜锁"、也不再用裸
+      # `pip install pytest` 覆盖锁内版本。整个"建 venv + 按锁安装 + editable +
+      # 测试 overlay + 校验"由 .tools/ci-project.py 转交 .tools/provision-envs.py
+      # ——与本机供给完全同一条实现，CI 不再有第二套安装器。矩阵里没有
+      # venv/editable/deps/test 字段：它们都从 .tools/projects.json 派生，
+      # 由上面的 guard 步骤守门。
+      - name: Install dependencies (manifest-driven)
+        shell: pwsh
+        # 每步失败立即停止，避免前一步的错误被后续命令掩盖。
+        # 注意：这里**不**对 job 解释器做任何 pip 安装（包括 pip 自升级）——
+        # setup-python 的解释器只当母本，项目依赖一律进各自的项目 .venv。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" install `
+            --dir "${{ matrix.dir }}" `
+            --log "${{ runner.temp }}/ci-install-${{ strategy.job-index }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "project install failed ($LASTEXITCODE)" }
+
+      # 工单38守门（S1a 起由脚本承担）：实际安装的 pytest 必须落在该子项目
+      # requirements.txt 声明的版本区间内，防止锁与声明再次漂移。判断逻辑与
+      # overlay 安装共用 .tools/_envcommon.py，不在 YAML 里重写一遍。
+      - name: Assert pytest matches declared range
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          # 各工具的锁定文件名不统一，按优先级自动探测。
-          # requirements-win-py310.lock 是 Windows 原生锁（含哈希），优先使用。
-          $lock = @(
-            'requirements-win-py310.lock', 'requirements.lock.txt', 'requirements.lock',
-            'requirements-lock.txt', 'requirements.txt'
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          Write-Host "using requirements: $lock"
-          if ($lock) { python -m pip install -r $lock }
-          python -m pip install pytest ${{ matrix.deps }}
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" check-pytest `
+            --dir "${{ matrix.dir }}"
+          if ($LASTEXITCODE -ne 0) { throw "pytest declaration check failed ($LASTEXITCODE)" }
 
       - name: Run tests
-        working-directory: ${{ matrix.dir }}
         env:
           # GitHub Windows runner 的 TEMP 默认是 8.3 短名（C:\Users\RUNNER~1\AppData\Local\Temp），
           # 会让「保存的路径 vs 真实路径」这类比较出现长短名不一致而假失败。
           # runner.temp 是 D:\a\_temp，各段都短于 8 字符，不会产生短名别名。
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: ${{ matrix.test || 'python -m pytest -q' }}
+        shell: pwsh
+        # 测试命令来自 .tools/projects.json 的 tests 字段：09-HRTEM模拟 跑
+        # pytest + verify_physics，010-STEM模拟 跑 verify_physics，全整合 跑
+        # smoke_test，其余跑 pytest。ci-project.py 依次执行全部命令、逐条判定
+        # 退出码，并完整保存 stdout/stderr（不只失败 tail）。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python "${{ github.workspace }}/.tools/ci-project.py" test `
+            --dir "${{ matrix.dir }}" `
+            --log "${{ runner.temp }}/ci-test-${{ strategy.job-index }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
+
+  # ---------------------------------------------------------------------------
+  # 引擎同步守门（审计条目 15 轻量路线）：09-HRTEM模拟/tem_sim 与
+  # 010-STEM模拟/stem_sim 是同一套模拟引擎的两份拷贝，已因单侧打补丁分叉过
+  # （相位标度 /pixel_area 曾修在 010、漏在 09）。对两侧公共模块做 AST 级
+  # 函数体比对、对 data/ 数据表做 sha256 比对，未在 .tools/check_engine_sync.py
+  # 豁免表中声明理由的不一致即失败。跑在 Linux 上，纯标准库，无需项目依赖。
+  # ---------------------------------------------------------------------------
+  engine-sync:
+    name: engine sync (tem_sim vs stem_sim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (审计 95)
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Check 09 tem_sim <-> 010 stem_sim
+        run: python .tools/check_engine_sync.py
 
 # Known gaps found by this workflow (not fixed here — see repository issues):
-#   1. 03-应变分析/原子级应力分析-PPA 的测试导入 yaml，但 requirements*.txt / lock 均未声明 pyyaml。
+#   1. 【已解决 2026-10-02】03-应变分析/原子级应力分析-PPA 的 yaml 依赖已在
+#      requirements.txt / pyproject.toml / lock 中声明（审计工单 41），
+#      矩阵行不再用 deps 补装。
 #   2. 010-STEM模拟/tests/test_e2e_au.py 用 test_* 命名但不具 pytest 结构（函数间靠返回值串联），
 #      故 CI 改跑 README 记录的 tests/verify_physics.py。
+#   3. 03-应变分析/原子中心识别模型开发：多个测试经 preprocessing 懒加载 import cv2，
+#      但 pyproject core dependencies 未声明 opencv（只在 [infer]/[train] extras 里），
+#      CI 用 deps=opencv-python==4.11.0.86 补齐（与其 extras 的 pin 一致）。
+#   4. 03-应变分析/原子中心识别模型开发 tests/test_annotations.py::
+#      test_packaged_smoke_path_exercises_gui_and_export 曾断言捆绑字体
+#      (assets/NotoSansCJKsc-AtomAnnotator.otf) 注册成功，而仓库为控制体积未收录
+#      该 .otf（仅存 FONT_SOURCE.txt 与 OFL.txt，见其下载指引）。现测试已改为按
+#      资产存在性条件跳过：资产在场才断言注册成功，否则 pytest.skip——CI 不再
+#      deselect 该用例（字体回补后断言自动恢复生效）。

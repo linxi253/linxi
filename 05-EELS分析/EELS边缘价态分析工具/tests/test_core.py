@@ -165,6 +165,7 @@ def test_config_rejects_ambiguous_distance_bins() -> None:
                 output_dir=root / "output",
                 references=tuple(references),
                 distance_bins=bins,
+                along_surface_segment_nm=5.0,
             )
             try:
                 config.validate()
@@ -195,6 +196,7 @@ def test_config_rejects_invalid_injection_grid() -> None:
                 input_path=source,
                 output_dir=root / "output",
                 references=tuple(references),
+                along_surface_segment_nm=5.0,
                 **settings,
             )
             try:
@@ -216,8 +218,11 @@ def test_config_validates_windows_and_scalars() -> None:
         for state in range(3):
             (root / f"cu{state}.dm4").touch()
 
-        # 默认配置必须通过校验（保证新增规则没有误伤合法设置）。
-        AnalysisConfig(input_path=source, output_dir=root / "out", references=references).validate()
+        # 默认值组合必须通过校验（保证新增规则没有误伤合法设置）。
+        # along_surface_segment_nm 是唯一不设数值默认的样品/预设绑定参数，
+        # 这里显式补一个中性值，其余全部走默认。
+        AnalysisConfig(input_path=source, output_dir=root / "out", references=references,
+                       along_surface_segment_nm=5.0).validate()
 
         invalid_settings = (
             {"savgol_polyorder": 0},
@@ -234,6 +239,7 @@ def test_config_validates_windows_and_scalars() -> None:
                 input_path=source,
                 output_dir=root / "out",
                 references=references,
+                along_surface_segment_nm=5.0,
                 **settings,
             )
             try:
@@ -249,6 +255,7 @@ def test_config_validates_windows_and_scalars() -> None:
             input_path=source,
             output_dir=existing_file,
             references=references,
+            along_surface_segment_nm=5.0,
         )
         try:
             config.validate()
@@ -538,6 +545,16 @@ def test_pipeline_end_to_end_on_synthetic_si(tmp_path, monkeypatch) -> None:
         high_loss_dataset=2,
         bootstrap_resamples=50,
         injection_simulations=0,
+        along_surface_segment_nm=5.0,
+        # 距离分层不再有 Cu 专用默认：需要表层剖面时必须显式提供
+        #（此处沿用内置 Cu 预设的分箱，测试表层/内部的 Cu1 权重差异）。
+        distance_bins=(
+            DistanceBin("E1", 0.0, 2.2),
+            DistanceBin("E2", 2.2, 4.4),
+            DistanceBin("E3", 4.4, 6.6),
+            DistanceBin("E4", 6.6, 11.0),
+            DistanceBin("Bulk", 11.0, None),
+        ),
     )
     artifacts = run_analysis(config)
     paths = dm4io  # noqa: F841 - 占位避免误导，真实检查见下方 reporting 导入

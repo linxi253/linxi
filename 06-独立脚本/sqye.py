@@ -4,11 +4,19 @@ from skimage import io, restoration
 from scipy.signal import convolve2d
 
 
-# User input
-input_folder = r'D:/data/input'  # 输入文件夹路径
-output_folder = r'D:/data/output'  # 输出文件夹路径
-saveImage = 5  # 1 = save images, 0 = don't save images
-psf_radius = 2
+# User input（从环境变量读取；不内置任何本机默认路径，缺失即报错并打印用法）
+input_folder = os.environ.get('SQYE_INPUT_DIR', '').strip()
+output_folder = os.environ.get('SQYE_OUTPUT_DIR', '').strip()
+if not input_folder or not output_folder:
+    raise SystemExit(
+        '[sqye] 缺少环境变量 SQYE_INPUT_DIR / SQYE_OUTPUT_DIR'
+        '（分别为输入/输出文件夹路径）。\n'
+        '用法：先设置环境变量再运行，例如：\n'
+        '  PowerShell: $env:SQYE_INPUT_DIR = \'<输入文件夹>\'; '
+        '$env:SQYE_OUTPUT_DIR = \'<输出文件夹>\'\n'
+        '  cmd:        set SQYE_INPUT_DIR=<输入文件夹> && '
+        'set SQYE_OUTPUT_DIR=<输出文件夹>')
+saveImage = 1  # 非 0 即保存反卷积结果，0 = 只算不存
 nsr = 0.6  # noise to signal ratio
 
 # Create output folder if needed

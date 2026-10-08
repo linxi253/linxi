@@ -23,6 +23,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -471,7 +480,8 @@ class LabelReviewApp:
                 yolo_lines.append(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
 
             export_file = self.export_dir / f"{label_file.stem}.txt"
-            with open(export_file, 'w') as f:
+            # encoding 显式化：内容目前是纯 ASCII，但按 locale 落盘不可移植。
+            with open(export_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(yolo_lines))
             count += 1
 

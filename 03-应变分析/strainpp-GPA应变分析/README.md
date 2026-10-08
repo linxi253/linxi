@@ -69,7 +69,8 @@ strainpp-gpa image.tif --g1 30 0 --g2 0 30 --sigma1 5 --sigma2 5
   ImageJ 标定）。
 
 Windows 独立程序位于 `dist\Strain++GPA.exe`。它带有版本资源，但只有在构建时
-提供代码签名证书才会被数字签名。
+提供代码签名证书才会被数字签名。版本资源 `version_info.txt` 为手写副本、可能滞后，
+发布版本一律以 `_version.py`（单一来源，当前 1.4.1）为准。
 
 ## 图形界面工作流
 
@@ -242,7 +243,8 @@ $env:STRAINPP_CERT_PASSWORD = '...'
 .\build.ps1
 ```
 
-证书和密码不要提交到项目中。CI 配置位于 `.github\workflows\test.yml`。
+证书和密码不要提交到项目中。CI 配置位于 `.github\workflows\ci.yml`
+（矩阵条目 `03 Strain++ GPA`）。
 
 ## 已知边界
 
@@ -263,7 +265,7 @@ GNU General Public License v3 或更高版本发布。完整条款见 [LICENSE](
 本软件不提供任何明示或默示担保。原始 Strain++ 作者及论文作者不对本修改版的
 错误或结果解释负责。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

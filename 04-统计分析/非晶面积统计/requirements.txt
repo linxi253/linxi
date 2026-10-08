@@ -1,0 +1,22 @@
+# 电镜晶体/非晶区域统计分析工具 v5.3 依赖清单
+# Python >= 3.10（requirements.lock.txt 中的 numpy==2.2.6 需要 Python >= 3.10；
+# 3.9 环境安装锁文件会因无匹配发行版而失败）。2026-09-28 起锁大版本上界，
+# 防止未来破坏性大版本直接影响科研可复现性；上界须覆盖 requirements.lock.txt
+# 中已验证的版本。
+# 精确复现请使用 requirements.lock.txt（干净 venv 中解析生成）。
+
+# 图像处理
+opencv-python>=4.8.0,<6.0
+numpy>=1.24.0,<3.0
+scipy>=1.10.0,<2.0
+
+# 文件IO
+tifffile>=2023.9.26
+Pillow>=10.0.0,<13.0
+
+# 数据分析与导出
+pandas>=2.0.0,<3.0
+openpyxl>=3.1.0,<4.0
+
+# GUI 框架
+ttkbootstrap>=1.10.0,<3.0

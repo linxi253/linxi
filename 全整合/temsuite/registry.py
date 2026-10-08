@@ -22,6 +22,11 @@ def _looks_like_workspace(path: Path) -> bool:
     return (path / "01-视频与数据提取").is_dir() or (path / "02-图像处理").is_dir()
 
 
+# 主源码开发树里部分项目的源码根比分类目录多一层（如非晶面积统计的
+# pythonProject）。公开候选仓库已扁平化；Suite 需同时支持两种布局。
+_NESTED_SOURCE_ROOT = "pythonProject"
+
+
 def _detect_workspace_root() -> Path:
     """定位存放各工具项目的根目录（即 AIforTEM 目录）。
 
@@ -96,6 +101,10 @@ class ToolSpec:
         ``run_mode="subprocess"`` 且工具需以 ``python -m <module>`` 方式启动时填写的
         模块名（包内使用相对导入的模块无法按脚本路径直接执行）。填写后
         ``entry`` 仅用于 :attr:`available` 校验文件存在，实际启动走本字段。
+    python_exe:
+        显式指定的子进程解释器路径。缺省时自动探测项目自带的 ``.venv``
+        解释器（见 :meth:`resolve_python_exe`），两者都缺失才回退到套件
+        自身解释器。
     """
 
     tool_id: str
@@ -112,6 +121,7 @@ class ToolSpec:
     preload: tuple[str, ...] = ()
     subprocess_args: tuple[str, ...] = ()
     subprocess_module: str = ""
+    python_exe: Path | None = None
     description: str = ""
     notes: str = ""
     _cached_dir: list[Path] = field(default_factory=list, repr=False, compare=False)
@@ -123,7 +133,34 @@ class ToolSpec:
 
     @property
     def project_dir(self) -> Path:
-        return (WORKSPACE_ROOT / self.relative_dir).resolve()
+        """项目根目录。
+
+        公开候选仓库里各工具是**扁平**布局（``04-统计分析/非晶面积统计``），
+        而主源码开发树里非晶面积统计的源码根多一层 ``pythonProject``
+        （``04-统计分析/非晶面积统计/pythonProject``）。两者都已存在于实际
+        工作区，Suite 必须在显式 ``TEMSUITE_WORKSPACE`` 下都能发现，否则同步时
+        会被迫搬迁主源码目录（回归 2026-10-03 R3）。
+
+        解析顺序：**扁平优先**，只有扁平布局的入口不存在时才回退到
+        ``pythonProject`` 层。这样候选仓库行为完全不变，主源码树也能直接用。
+        """
+        base = (WORKSPACE_ROOT / self.relative_dir).resolve()
+        if self._entry_exists(base):
+            return base
+        nested = base / _NESTED_SOURCE_ROOT
+        if nested.is_dir() and self._entry_exists(nested):
+            return nested
+        return base
+
+    def _entry_exists(self, root: Path) -> bool:
+        """该根目录下是否能找到本工具的入口（不递归，只看本层）。"""
+        if not root.is_dir():
+            return False
+        if self.load_mode == "file":
+            return (root / self.entry).is_file()
+        # module 模式：entry 的首段作为包/模块名查找
+        head = self.entry.split(".")[0]
+        return (root / f"{head}.py").is_file() or (root / head).is_dir()
 
     @property
     def extra_paths(self) -> tuple[Path, ...]:
@@ -137,6 +174,27 @@ class ToolSpec:
         if self.load_mode == "file":
             return (self.project_dir / self.entry).is_file()
         return True
+
+    def resolve_python_exe(self) -> Path | None:
+        """解析 ``run_mode="subprocess"`` 工具应使用的解释器。
+
+        优先级：显式 :attr:`python_exe` > 项目自带 ``.venv`` 中的解释器 >
+        ``None``（调用方回退到套件自身解释器并告警）。
+
+        各子进程工具的依赖版本锁定在它们自己的 venv 中（如原子标注工具锁定
+        numpy 1.26.4，而套件锁为 numpy 2.2.6），复用套件解释器会打破该
+        版本契约，因此必须优先使用项目解释器。
+        """
+        if self.python_exe is not None:
+            return self.python_exe
+        candidates = (
+            self.project_dir / ".venv" / "Scripts" / "python.exe",
+            self.project_dir / ".venv" / "bin" / "python",
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -176,7 +234,7 @@ TOOLS: tuple[ToolSpec, ...] = (
             "video_extractor.sampling",
             "video_extractor.manifest",
         ),
-        description="视频逐帧提取为 TIFF 堆栈，支持 ImageJ / OME-TIFF 格式与多种采样策略。",
+        description="视频逐帧提取为 ImageJ 兼容 TIFF 堆栈（未压缩、TYX），支持多种采样策略。",
     ),
     # ---------------- 2 · 图像处理 ----------------
     ToolSpec(
@@ -189,7 +247,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         factory="DriftCorrectionApp",
         preload=("drift_core",),
         description="v7 合并版：相位互相关 + 纯平移鲁棒中位数匹配的帧间漂移矫正，兼顾文件安全与算法质量。",
-        notes="v7 由 v5.2（安全版）与 v6.1（算法版）合并而来；旧版已归档至 08-历史版本。",
+        notes="v7 由 v5.2（安全版）与 v6.1（算法版）合并而来；旧版归档（08-历史版本）在开发机上，未随本仓库分发。",
     ),
     ToolSpec(
         tool_id="hrtem_filter",
@@ -356,7 +414,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         name="晶体/非晶区域统计",
         short_name="晶非统计",
         category="stats",
-        relative_dir=r"04-统计分析\非晶面积统计\pythonProject",
+        relative_dir=r"04-统计分析\非晶面积统计",
         entry="gui.app",
         factory="EMImageAnalyzerApp",
         preload=(
@@ -391,8 +449,12 @@ TOOLS: tuple[ToolSpec, ...] = (
         run_mode="subprocess",
         description="HAADF-STEM 特征演化分析，输出 14 张期刊级图表与统计报告。",
         notes=(
-            "该脚本为无 GUI 类的批处理程序，且在模块顶层执行 matplotlib.use('Agg')，"
-            "会全局覆盖其他工具依赖的 TkAgg 后端，因此以独立子进程运行以彻底隔离。"
+            "交互式批处理脚本，**不是**纯 CLI：不带 --file 时它会自建 Tk 根窗口弹出"
+            "文件选择框，再依次询问帧时间间隔与样品描述（取消任一输入即退出）。"
+            "因此 Suite 以默认参数启动时用户会看到该工具自己的选择框，这是预期的"
+            "交互路径；带 --file/--output/--dt 则可无人值守跑完整流程。"
+            "模块顶层执行 matplotlib.use('Agg') 会全局覆盖其他工具依赖的 TkAgg 后端，"
+            "故必须以独立子进程运行以彻底隔离。"
         ),
     ),
     # ---------------- 7 · 模拟仿真 ----------------

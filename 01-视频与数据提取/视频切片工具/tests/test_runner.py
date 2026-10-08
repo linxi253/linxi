@@ -5,7 +5,9 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
+import tifffile
 
 import video_extractor.runner as runner_mod
 
@@ -169,6 +171,112 @@ def test_run_batch_warns_for_vfr_with_target_fps(tmp_path: Path, monkeypatch) ->
     )
     assert results[0].state is JobState.FAILED
     assert "拒绝覆盖" in (results[0].error or "")
+
+
+def test_run_batch_warns_for_multiple_video_streams(tmp_path: Path, monkeypatch) -> None:
+    """多视频流容器必须触发告警（此前 stream_count 恒为 1，分支不可达）。"""
+
+    class FakeFFmpegManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def resolve(self):
+            return SimpleNamespace(
+                ffmpeg=tmp_path / "ffmpeg", ffprobe=tmp_path / "ffprobe",
+                version=(8, 0, 3),
+            )
+
+    def fake_probe(ffprobe, path, *, on_started=None) -> VideoInfo:
+        return VideoInfo(
+            path=path, width=64, height=48, duration_s=2.0,
+            average_fps=30.0, nominal_fps=30.0, frame_count=60,
+            pixel_format="yuv420p", bits_per_sample=8, color_family="rgb",
+            codec="h264", is_variable_fps=False,
+            stream_index=1, stream_count=2, video_stream_ordinal=1,
+        )
+
+    monkeypatch.setattr(runner_mod, "FFmpegManager", FakeFFmpegManager)
+    monkeypatch.setattr(runner_mod, "probe_video", fake_probe)
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    video = input_dir / "a.mp4"
+    video.write_bytes(b"x")
+    output_dir = tmp_path / "output"
+    # 预置清单制造"拒绝覆盖"失败，让批次在告警后立即终止，无需真实解码
+    _final, manifest, _parent = output_paths_for(input_dir, output_dir, video)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("csv", encoding="utf-8")
+
+    events: list[dict] = []
+    results = JobRunner(ExtractOptions()).run_batch(input_dir, output_dir, events.append)
+
+    assert any(
+        event.get("kind") == "warning" and "条视频流" in event.get("message", "")
+        for event in events
+    )
+    assert results[0].state is JobState.FAILED
+
+
+def test_runner_two_frames_same_pts_degrades_without_zero_interval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """恰好 2 帧且 PTS 相同：median 间隔为 0，必须降级为"无固定帧间隔"，
+    而不是在写 TIFF 元数据时 1.0/0 除零使任务失败。"""
+
+    class FakeFFmpegManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def resolve(self):
+            return SimpleNamespace(
+                ffmpeg=tmp_path / "ffmpeg", ffprobe=tmp_path / "ffprobe",
+                version=(8, 0, 3),
+            )
+
+    def fake_probe(ffprobe, path, *, on_started=None) -> VideoInfo:
+        return VideoInfo(
+            path=path, width=4, height=4, duration_s=0.0,
+            average_fps=30.0, nominal_fps=30.0, frame_count=2,
+            pixel_format="gray", bits_per_sample=8, color_family="gray",
+            codec="rawvideo", is_variable_fps=False,
+        )
+
+    class FakeCount:
+        frames = 2
+        pts_seconds = [0.0, 0.0]
+
+    class FakeDecoder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def count_frames(self, video, options, spec, cancelled, *args, **kwargs):
+            return FakeCount()
+
+        def iter_frames(self, video, options, spec, cancelled, *args, **kwargs):
+            frame = np.zeros((4, 4), dtype=np.uint8)
+            yield frame
+            yield frame
+
+    monkeypatch.setattr(runner_mod, "FFmpegManager", FakeFFmpegManager)
+    monkeypatch.setattr(runner_mod, "probe_video", fake_probe)
+    monkeypatch.setattr(runner_mod, "FrameDecoder", FakeDecoder)
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    video = input_dir / "dup_pts.mkv"
+    video.write_bytes(b"x")
+    output_dir = tmp_path / "output"
+
+    results = JobRunner(ExtractOptions()).run_batch(input_dir, output_dir)
+
+    assert results[0].state is JobState.COMPLETED, results[0].error
+    assert results[0].timeline_source == "measured"
+    assert any("重复 PTS" in w for w in results[0].warnings)
+    with tifffile.TiffFile(Path(results[0].output_path)) as tif:
+        metadata = tif.imagej_metadata or {}
+    assert "finterval" not in metadata
+    assert "fps" not in metadata
 
 
 def test_run_batch_no_vfr_warning_for_all_mode(tmp_path: Path, monkeypatch) -> None:

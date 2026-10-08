@@ -31,6 +31,16 @@ from .series import parse_list, run_series
 from .sim_core import SimPlan, StemSimResult, load_structure, parse_cif_meta, plan, run_simulation
 from .worker import Worker
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 _TOOL_ROOT = Path(__file__).resolve().parent.parent
 PRESETS_DIR = _TOOL_ROOT / "presets"
 CIF_DIR = _TOOL_ROOT / "cif"

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
@@ -23,6 +24,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+logger = logging.getLogger(__name__)
 
 matplotlib.use("TkAgg")
 matplotlib.rcParams["font.sans-serif"] = [
@@ -391,8 +403,11 @@ class DelocApp:
         if self._image_artist is not None:
             try:
                 self._image_artist.remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                # 合理吞除（保留回退语义）：已被摘除/未挂载的 artist 在不同
+                # matplotlib 版本抛不同异常（RuntimeError/NotImplementedError/
+                # ValueError），纯清理路径无需区分；留 debug 日志防真问题被掩盖。
+                logger.debug("旧图像 artist 移除失败（忽略）: %s", exc)
             self._image_artist = None
 
         lo, hi = np.percentile(img.astype(np.float32), [0.5, 99.5])

@@ -30,6 +30,15 @@ from tkinter import ttk
 import tkinter.messagebox as _mb
 import tkinter.filedialog as _fd
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 TMP = tempfile.mkdtemp(prefix="contrast_smoke_")
 STACK_TIF = os.path.join(TMP, "stack.tif")
 SINGLE_TIF = os.path.join(TMP, "single.tif")

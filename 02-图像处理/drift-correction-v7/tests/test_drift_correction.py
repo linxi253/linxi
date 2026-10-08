@@ -16,6 +16,16 @@ from drift_correction import (
     _representative_preview_frame,
 )
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 class DriftCorrectionPreviewTests(unittest.TestCase):
     def test_package_health_check_runs_real_nonzero_correction(self):

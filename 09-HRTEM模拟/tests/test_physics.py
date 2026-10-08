@@ -1,7 +1,7 @@
 """pytest 封装：verify_physics 中的全部物理自检。
 
 运行：python -m pytest tests/ -v
-（无外部数据依赖；E 盘相关的 0820 复现请运行 validate_reproduce.py）
+（无外部数据依赖；内部参考数据集基线复现请运行 validate_reproduce.py）
 """
 
 import sys
@@ -30,6 +30,11 @@ def test_scattering_scale():
 
 def test_phase_kernel_fft():
     vp.test_phase_kernel_fft()
+
+
+def test_phase_scale():
+    """绝对标度回归：核峰值收敛到解析峰值 γλ·π·Σ(a_i/b_i)（去掉 /(sx·sy) 必失败）。"""
+    vp.test_phase_scale()
 
 
 def test_multislice_unitarity():
@@ -88,6 +93,7 @@ def test_accumulate_phase_matches_reference():
         f"切片累加与参考实现差异 max={np.abs(new - ref).max():.2e}"
     )
     # 相对截断 cutoff=12（e^-12 ≈ 6e-6 边界幅度）带来 ~1e-6 量级的
-    # 设计性总积分亏缺，与累加实现无关
-    expect = gl * float(vp.electron_scattering_factor("Au", 0.0, "gauss3"))
+    # 设计性总积分亏缺，与累加实现无关。核为像素平均值口径：
+    # Σ_pixels K = γλ·f_e(0)/(s·s)（旧"像素积分"口径少除 s²，此断言必失败）
+    expect = gl * float(vp.electron_scattering_factor("Au", 0.0, "gauss3")) / (s * s)
     assert abs(new.sum() - expect * len(pos)) / (expect * len(pos)) < 1e-5

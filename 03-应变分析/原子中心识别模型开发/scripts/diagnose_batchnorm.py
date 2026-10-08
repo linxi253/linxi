@@ -9,7 +9,18 @@ from ultralytics import YOLO
 from atom_center.preprocessing import input_tensor,prepare_tile
 from atom_center.backends import decode_output
 from atom_center.metrics import match_points
-from atom_center.storage import write_json
+from atom_center.model_manifest import sha256_file
+from atom_center.storage import write_json,read_json
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 
 def main():
@@ -21,7 +32,16 @@ def main():
     x=torch.from_numpy(np.stack([input_tensor(i)[0] for i in images])).to('cuda')
     truth=[np.loadtxt(run/'memorization_data/labels'/p.with_suffix('.txt').name,ndmin=2)[:,1:3]*640-.5 for p in files]
     _,transform=prepare_tile(images[0],640)
-    model=YOLO(str(run/'training/weights/last.pt')).model.float().to('cuda').eval()
+    # 审计 79：与 backends.TorchBackend 一致，加载前先按 training.py 记录的 run 状态
+    # 校验 last.pt 的 SHA-256，防止 run 目录被替换后无提示地加载被篡改的权重。
+    state=read_json(run/'state.json')
+    entry=(state.get('checkpoints') or {}).get('last.pt')
+    if not entry:
+        raise SystemExit('run state.json has no last.pt checkpoint record; refusing to load unverified weights')
+    weights=(run/entry['path']).resolve()
+    if not weights.is_relative_to(run.resolve()) or sha256_file(weights)!=entry['sha256']:
+        raise SystemExit(f'last.pt is missing or its SHA-256 differs from the training record: {weights}')
+    model=YOLO(str(weights)).model.float().to('cuda').eval()
     initial_params={k:v.detach().clone() for k,v in model.named_parameters()}
     rows=[]
     def measure(label,iou=.45):

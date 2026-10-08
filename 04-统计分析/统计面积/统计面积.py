@@ -17,6 +17,15 @@ import numpy as np
 import tifffile
 import pandas as pd
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('TkAgg')  # 显式指定后端，避免环境问题
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
@@ -76,6 +85,29 @@ try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
 except Exception:
     pass
+
+
+def close_tiff_stack(stack) -> None:
+    """显式释放 TIFF 内存映射占用的文件句柄（普通 ndarray 无副作用）。
+
+    沿 ``.base`` 链找到 np.memmap 并关闭其底层 ``_mmap``（与
+    03-应变分析/原子识别纯算法 atomic_core.close_tiff_stack 同一实现）。
+    Windows 下若不关闭，被 memmap 打开的源文件在映射被覆盖前一直
+    处于锁定状态（无法移动/删除/覆盖）。
+    """
+    current = stack
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, np.memmap):
+            mmap_obj = getattr(current, "_mmap", None)
+            if mmap_obj is not None:
+                try:
+                    mmap_obj.close()
+                except Exception:
+                    pass
+            return
+        current = getattr(current, "base", None)
 
 
 class TiffStackViewer:
@@ -740,6 +772,8 @@ class TiffStackViewer:
                     self.status_var.set(f"正在加载: {done}/{total}")
                 elif tag == 'ok':
                     _, _, stack, note, file_path = msg
+                    # 切换文件：先显式释放旧映射的文件句柄再覆盖引用
+                    close_tiff_stack(self.tiff_stack)
                     self.tiff_stack = stack
                     self.total_frames = stack.shape[0]
                     # 读取与维度规范化全部成功后才提交路径（回移主树修复），
@@ -755,6 +789,8 @@ class TiffStackViewer:
                         f"已加载: {Path(file_path).name} ({self.total_frames}帧, {note})")
                 elif tag == 'stack_ok':
                     _, _, stack, note, folder_path, failed_files = msg
+                    # 切换数据源：先显式释放旧映射的文件句柄再覆盖引用
+                    close_tiff_stack(self.tiff_stack)
                     self.tiff_stack = stack
                     self.total_frames = stack.shape[0]
                     # 文件夹模式：file_path 记为堆叠来源目录（与主树语义一致），
@@ -807,7 +843,24 @@ class TiffStackViewer:
             self._load_after_id = None
         # 代次自增使仍在运行的后台 worker 尽快退出
         self._load_generation += 1
-        plt.close('all')
+        # 退出路径：显式释放内存映射的文件句柄，解除对源文件的锁定
+        close_tiff_stack(self.tiff_stack)
+        self.tiff_stack = None
+        # 只关闭本工具持有的 figure：plt.close('all') 会清掉同进程内其他
+        # 工具（如 4D-STEM、GPA，以及在 Suite 里同时打开的其他标签页）
+        # 通过 pyplot 创建的图窗（回归 2026-09-29 P0）。
+        # 必须判空：plt.close(None) 等价于关闭**当前** figure，会把旁边的
+        # 图窗误关（尚未建图的实例或建图失败的路径都会走到这里）。
+        # 只关闭本工具持有的 figure：plt.close('all') 会清掉同进程内其他
+        # 工具（如 4D-STEM、GPA，以及在 Suite 里同时打开的其他标签页）
+        # 通过 pyplot 创建的图窗（回归 2026-09-29 P0）。
+        # 必须判空：plt.close(None) 等价于关闭**当前** figure，会把旁边的
+        # 图窗误关（尚未建图的实例或建图失败的路径都会走到这里）。
+        if self.fig is not None:
+            try:
+                plt.close(self.fig)
+            except Exception:
+                pass
         self.root.destroy()
 
     # ==================== 信息显示 ====================
@@ -2075,6 +2128,21 @@ class TiffStackViewer:
         except Exception as e:
             logger.exception("加载项目失败")
             messagebox.showerror("错误", f"加载项目失败: {str(e)}")
+            return
+
+        # 顶层必须是 dict：json.load 对 "[]"/"123"/"\"x\"" 都能成功解析，
+        # 随后的 .get 会抛未捕获的 AttributeError（打包版无控制台时用户
+        # 只见无响应）。校验失败时不清空当前项目，也不设置 _pending_project。
+        if not isinstance(project_data, dict):
+            messagebox.showerror(
+                "错误",
+                f"项目文件格式不正确：顶层应为 JSON 对象，实际为 "
+                f"{type(project_data).__name__}。")
+            # status_var 在完整实例上一定存在；用 getattr 兜底，使只构造了部分
+            # 字段的调用方也不会因提示本身再抛 AttributeError。
+            status_var = getattr(self, "status_var", None)
+            if status_var is not None:
+                status_var.set("加载项目失败：文件格式不正确")
             return
 
         tiff_path = project_data.get('file_path', '')

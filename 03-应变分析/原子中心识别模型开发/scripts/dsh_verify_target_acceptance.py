@@ -14,6 +14,15 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -42,7 +51,7 @@ def compact(metric, keys=METRIC_KEYS):
     return {key: metric[key] for key in keys if key in metric}
 
 
-def pipeline_from_manifest(manifest, checkpoint_path):
+def pipeline_from_manifest(manifest, checkpoint_path, expected_checkpoint_sha256):
     bundle, graph = verify_model_bundle(manifest)
     inf, ref = dict(bundle.inference), dict(bundle.refinement)
     config = replace(pipeline_config({'inference': {**inf, 'merge_after_refinement':
@@ -53,7 +62,11 @@ def pipeline_from_manifest(manifest, checkpoint_path):
                      refinement_max_shift_px=ref['max_shift_px'],
                      merge_after_refinement=inf.get('merge_after_refinement', False),
                      adaptive_merge_sigma=ref.get('merge_sigma'))
-    torch_backend = TorchBackend(checkpoint_path, expected_sha256=sha256_file(checkpoint_path),
+    # Audit 28: the expected digest comes from the training record returned by
+    # checkpoint_for_run (state.json entry["sha256"], itself re-verified against
+    # the file), never from a hash computed next to the load — a self-computed
+    # expected value would make TorchBackend's integrity gate tautological.
+    torch_backend = TorchBackend(checkpoint_path, expected_sha256=expected_checkpoint_sha256,
                                  contract=dict(bundle.input), inference=inf, device='cpu')
     return (onnx_pipeline(manifest), DetectionPipeline(torch_backend, config),
             bundle, graph, inf, ref)
@@ -100,7 +113,7 @@ def main():
     _, run_manifest, state = read_run(RUN)
     _, checkpoint_path, checkpoint_sha = checkpoint_for_run(RUN, args.checkpoint_name)
     onnx_pipe, torch_pipe, bundle, graph, inference, refinement = pipeline_from_manifest(
-        args.manifest, checkpoint_path)
+        args.manifest, checkpoint_path, checkpoint_sha)
     assert checkpoint_sha == bundle.metrics['source_checkpoint_sha256'], 'bundle/checkpoint mismatch'
 
     rows, parity_rows, hashes_before = [], [], {}

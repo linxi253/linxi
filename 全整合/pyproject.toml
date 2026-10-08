@@ -31,6 +31,14 @@ temsuite = "temsuite.app:main"
 [tool.setuptools]
 packages = ["temsuite"]
 
+[tool.pytest.ini_options]
+# Windows 上实测：pytest 默认的 fd 捕获与 Tk/Tcl 初始化相互干扰，
+# 受控 A/B 中 stdlib Tk 参数化用例在 fd 捕获下 6/600 失败、sys 捕获下 0/600 失败
+# （可复现，但 C 层机制未证实）。--capture=sys 不改动 OS 文件描述符，
+# 仍保留 Python 层 stdout/stderr 捕获，断言与用例数量均不变。
+# 这只是一项针对已观测干扰的缓解，不代表历史 Tk 问题已全部解决。
+addopts = "--capture=sys"
+
 [tool.ruff]
 line-length = 110
 target-version = "py310"

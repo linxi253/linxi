@@ -42,14 +42,26 @@ try {
 
     if ($CertificatePath) {
         $resolvedCertificate = (Resolve-Path -LiteralPath $CertificatePath).Path
+        # Sign from the user certificate store by thumbprint instead of
+        # passing the PFX: signtool's /p flag puts the private-key password
+        # on the process command line, where any same-machine process can
+        # read it (WMI Win32_Process.CommandLine, ETW/Sysmon process-creation
+        # events).  Importing with a SecureString keeps the password off the
+        # command line entirely.
+        if ($CertificatePassword) {
+            $securePassword = ConvertTo-SecureString -String $CertificatePassword -AsPlainText -Force
+        } else {
+            $securePassword = New-Object System.Security.SecureString  # passwordless PFX
+        }
+        $importedCertificate = Import-PfxCertificate `
+            -FilePath $resolvedCertificate `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $securePassword
         $signArgs = @(
             'sign', '/fd', 'SHA256', '/td', 'SHA256',
             '/tr', 'http://timestamp.digicert.com',
-            '/f', $resolvedCertificate
+            '/sha1', $importedCertificate.Thumbprint
         )
-        if ($CertificatePassword) {
-            $signArgs += @('/p', $CertificatePassword)
-        }
         $signArgs += $exePath
         & signtool.exe @signArgs 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) {

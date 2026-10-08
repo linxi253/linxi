@@ -32,6 +32,7 @@ DEPTH_LABELS = {
     BitDepth.UINT16.value: "16 位",
 }
 STATE_LABELS = {
+    "probing": "正在探测视频信息…",
     "counting": "正在统计帧数…",
     "hashing": "正在计算输入哈希…",
     "writing": "正在写入输出…",

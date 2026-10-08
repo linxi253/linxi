@@ -4,15 +4,41 @@ visualize_dp.py - Visualize diffraction patterns to understand data issues.
 import numpy as np
 import os
 import matplotlib
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-BASE = os.environ.get('STEM4D_DATA',
-                      r'D:\data\4dSTEM\20260707-Au')
-OUTPUT_DIR = os.environ.get('STEM4D_OUTPUT',
-                            os.path.join(BASE, 'analysis', 'results', 'v2'))
+BASE = os.environ.get('STEM4D_DATA', '').strip()
+
+
+def _resolve_output_dir():
+    """输出目录必须由环境变量提供（缺省报错并打印用法）。"""
+    output_dir = os.environ.get('STEM4D_OUTPUT', '').strip() or \
+        (os.path.join(BASE, 'analysis', 'results', 'v2') if BASE else '')
+    if not output_dir:
+        raise SystemExit(
+            '[visualize_dp] 未配置输出目录：请设置 STEM4D_OUTPUT'
+            '（或数据根目录 STEM4D_DATA）后重跑，例如：\n'
+            '  PowerShell: $env:STEM4D_OUTPUT = \'<输出目录>\'\n'
+            '  cmd:        set STEM4D_OUTPUT=<输出目录>')
+    return output_dir
+
+
+OUTPUT_DIR = ''
+
 
 def main():
+    global OUTPUT_DIR
+    OUTPUT_DIR = _resolve_output_dir()
     # Load the test data
     test_data = np.load(os.path.join(OUTPUT_DIR, 'test_data_correct.npy'))
     print(f'Test data shape: {test_data.shape}')

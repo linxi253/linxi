@@ -1,20 +1,4 @@
-# 构建产物
-build/
-dist/
-*.exe
-
-# Python 缓存
-__pycache__/
-*.pyc
-.pytest_cache/
-
-# IDE
-.idea/
-.vscode/
+# 本目录特有规则；通用 Python/构建/IDE 忽略规则见仓库根 .gitignore。
 
 # 临时文件
-*.log
 *.tmp
-
-# 会话工具
-.zcode/

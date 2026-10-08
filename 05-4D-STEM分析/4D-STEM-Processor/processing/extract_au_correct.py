@@ -7,7 +7,7 @@ to ``--crop`` scan positions and saved as ``{name}_correct.npy``.
 
 Usage:
     python processing/extract_au_correct.py
-    python processing/extract_au_correct.py --base-dir D:\\data --crop 128
+    python processing/extract_au_correct.py --base-dir <数据目录> --crop 128
     python processing/extract_au_correct.py file1.dm4 file2.dm4 --out-dir out
 """
 import argparse
@@ -17,15 +17,35 @@ import time
 
 import numpy as np
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import dm4_io
 
 
-DEFAULT_DATASETS = {
-    'Au_SI19': os.path.join('SI data (19)', '007_STEM SI.dm4'),
-    'Au_SI20': os.path.join('SI data (20)', '008_STEM SI.dm4'),
-    'Au_SI21': os.path.join('SI data (21)', '009_STEM SI.dm4'),
-}
+# 本机数据集布局不写入脚本：不带位置参数运行时，用环境变量
+# STEM4D_DATASETS 提供「名称=相对路径」清单（分号分隔，相对 --base-dir），
+# 例如：DS1=<相对路径1>;DS2=<相对路径2>
+DATASETS_ENV_VAR = 'STEM4D_DATASETS'
+
+
+def datasets_from_env(base_dir):
+    raw = os.environ.get(DATASETS_ENV_VAR, '').strip()
+    if not raw:
+        return {}
+    out = {}
+    for item in raw.split(';'):
+        name, sep, rel = item.partition('=')
+        if sep and name.strip() and rel.strip():
+            out[name.strip()] = os.path.join(base_dir, rel.strip().replace('/', os.sep))
+    return out
 
 
 def extract_with_dm4io(dm4_path, scan_crop=128, outpath=None):
@@ -74,16 +94,13 @@ def extract_with_dm4io(dm4_path, scan_crop=128, outpath=None):
 
 
 def main(argv=None):
-    default_base = os.environ.get(
-        'STEM4D_DATA', r'D:\data\4dSTEM\20260707-Au')
     parser = argparse.ArgumentParser(
         description='Extract 4D-STEM datacubes from DM4 files.')
     parser.add_argument('files', nargs='*',
-                        help='Explicit DM4 files (default: known Au datasets '
-                             'under --base-dir).')
-    parser.add_argument('--base-dir', default=default_base,
-                        help='Base data directory (default: STEM4D_DATA env '
-                             'or the original F:\\ path).')
+                        help='Explicit DM4 files (default: datasets from the '
+                             'STEM4D_DATASETS env, relative to --base-dir).')
+    parser.add_argument('--base-dir', default=os.environ.get('STEM4D_DATA'),
+                        help='Base data directory (default: STEM4D_DATA env).')
     parser.add_argument('--out-dir', default=None,
                         help='Output directory (default: '
                              '<base>/analysis/data).')
@@ -91,6 +108,9 @@ def main(argv=None):
                         help='Centre crop size in scan pixels.')
     args = parser.parse_args(argv)
 
+    if not args.files and not args.base_dir:
+        parser.error('未指定数据来源：请传入 DM4 文件，或设置环境变量 '
+                     'STEM4D_DATA / STEM4D_DATASETS 后重跑')
     out_dir = args.out_dir or os.path.join(args.base_dir, 'analysis', 'data')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -98,8 +118,11 @@ def main(argv=None):
         datasets = {os.path.splitext(os.path.basename(p))[0]: p
                     for p in args.files}
     else:
-        datasets = {name: os.path.join(args.base_dir, rel)
-                    for name, rel in DEFAULT_DATASETS.items()}
+        datasets = datasets_from_env(args.base_dir)
+        if not datasets:
+            parser.error('未提供数据集清单：请传入 DM4 文件，或设置 '
+                         f'{DATASETS_ENV_VAR}=名称=相对路径;... （相对 '
+                         '--base-dir）后重跑')
 
     for name, path in datasets.items():
         if not os.path.exists(path):

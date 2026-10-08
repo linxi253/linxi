@@ -8,8 +8,9 @@ the v5 PyInstaller specifications.
 - `pyinstaller-specs/` contains obsolete specifications whose entry scripts no
   longer exist.
 
-The full pre-repair directory is additionally preserved at
-`<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`.
+The full pre-repair directory was additionally archived on the original
+developer machine as `<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`;
+that archive is **not distributed with this repository**.
 
 ## Third-party files not redistributed here
 

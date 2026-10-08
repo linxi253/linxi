@@ -20,6 +20,7 @@ TIF 衬度分析核心算法模块（无 GUI 依赖）。
 
 __version__ = "2.5.0"
 
+import logging
 import os
 import re
 import time
@@ -28,6 +29,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import tifffile
+
+logger = logging.getLogger(__name__)
 
 # 算法枚举：(显示名, method_key)。索引由 GUI 下拉框维护。
 ALGORITHMS: List[Tuple[str, str]] = [
@@ -210,13 +213,14 @@ def rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
 
     channels = rgb[..., :3].astype(np.float64)
     weights = np.array([0.2989, 0.5870, 0.1140], dtype=np.float64)
-    gray = np.rint(channels @ weights)
+    weighted = channels @ weights
 
     dtype = rgb.dtype
     if np.issubdtype(dtype, np.integer):
+        gray = np.rint(weighted)
         info = np.iinfo(dtype)
         return np.clip(gray, 0, info.max).astype(dtype)
-    return np.clip(gray, 0.0, None).astype(dtype)
+    return np.clip(weighted, 0.0, None).astype(dtype)
 
 
 def _color_axis_position(shape: Tuple[int, ...], axes: str) -> Optional[int]:
@@ -234,7 +238,8 @@ def _color_axis_position(shape: Tuple[int, ...], axes: str) -> Optional[int]:
 
 
 def normalize_tiff_array_ex(arr: np.ndarray, axes: Optional[str] = None,
-                            force_frames: bool = False
+                            force_frames: bool = False,
+                            axes_unknown: bool = False
                             ) -> Tuple[np.ndarray, List[str]]:
     """统一 TIF 数组维度为 (T, H, W) 灰度堆叠，并返回处理说明。
 
@@ -254,6 +259,11 @@ def normalize_tiff_array_ex(arr: np.ndarray, axes: Optional[str] = None,
     长度为 3/4）当作**多帧堆叠**读取。部分软件（含 tifffile 自身在
     3 帧/4 帧输入时的默认行为）会把多帧写成 planar RGB(A)，
     这时按颜色解析会静默合并帧，需要用户显式覆盖。
+
+    ``axes_unknown=True`` 表示 axes 并非"文件本来就没有"，而是**元数据
+    解析失败**拿不到（probe.degraded）。此时 3D 数组仍按默认的灰度堆叠
+    保守处理（不擅自改判颜色），但必须输出显式 note，让用户知道启发式
+    是在信息缺失下做出的，planar 彩色单页可能被误判（工单26 修法4）。
 
     Returns
     -------
@@ -290,6 +300,10 @@ def normalize_tiff_array_ex(arr: np.ndarray, axes: Optional[str] = None,
                     notes.append("若这 3 个平面实为 3 帧，请勾选『多帧解析』")
             return gray[np.newaxis, ...], notes
         # 无颜色轴（或 axes 缺失）：按灰度堆叠处理
+        if axes_unknown:
+            notes.append(
+                "TIFF 元数据解析失败（axes 未知）：已按『逐帧灰度堆叠』读取；"
+                "若实为 planar 彩色单页（3/4 个平面），本解析不可信，请核查源文件元数据")
         if "Z" in axes:
             notes.append(
                 f"检测到 Z 轴（axes={axes}）：Z 切片将按『帧』序处理；"
@@ -379,6 +393,11 @@ class TiffProbe:
     pixel_size_text: str = ""
     file_size: int = 0
     file_mtime: str = ""
+    # 降级可辨识（工单26）：TiffFile 能打开但 series/pages/tags 访问失败时，
+    # 字段会以空值/0 呈现（nbytes=0 还会让调用方的 OOM 确认失效）。
+    # degraded=True 表示发生过此类解析失败，probe_errors 逐项记录原因。
+    degraded: bool = False
+    probe_errors: Tuple[str, ...] = ()
 
     @property
     def shape_text(self) -> str:
@@ -515,14 +534,20 @@ def probe_tiff(path: str) -> TiffProbe:
         st = os.stat(path)
         file_size = st.st_size
         file_mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))
-    except OSError:
-        pass
+    except OSError as exc:
+        # 仅影响展示用的文件大小/时间字段；文件真不可读时随后 TiffFile 会抛出
+        logger.debug("probe_tiff: os.stat(%s) 失败: %s", path, exc)
+
+    # 逐项收集解析失败：降级要在返回值上可辨识（TiffProbe.degraded），
+    # 而不是把空值/0 静默交给调用方（nbytes=0 会使 OOM 确认被跳过）。
+    failures: List[str] = []
 
     with tifffile.TiffFile(path) as tf:
         n_pages = 0
         try:
             n_pages = len(tf.pages)
-        except Exception:
+        except Exception as exc:
+            failures.append(f"页数(n_pages)读取失败: {exc}")
             n_pages = 0
 
         axes, shape, dtype_str, nbytes = "", (), "", 0
@@ -533,20 +558,23 @@ def probe_tiff(path: str) -> TiffProbe:
                 shape = tuple(int(v) for v in s0.shape)
                 dtype_str = str(np.dtype(s0.dtype))
                 nbytes = int(np.prod(shape)) * int(np.dtype(s0.dtype).itemsize) if shape else 0
-        except Exception:
+        except Exception as exc:
+            failures.append(
+                f"series[0] 元数据读取失败（axes/shape/dtype/体积不可用）: {exc}")
             if n_pages:
                 try:
                     shape = tuple(int(v) for v in tf.pages[0].shape)
                     dtype_str = str(tf.pages[0].dtype)
                     nbytes = int(np.prod(shape)) * int(tf.pages[0].dtype.itemsize)
-                except Exception:
-                    pass
+                except Exception as exc2:
+                    failures.append(f"首页(pages[0]) 形状/类型回退也失败: {exc2}")
 
         page = None
         try:
             if n_pages:
                 page = tf.pages[0]
-        except Exception:
+        except Exception as exc:
+            failures.append(f"首页(pages[0]) 获取失败: {exc}")
             page = None
 
         def _tag(name: str, default=""):
@@ -554,7 +582,10 @@ def probe_tiff(path: str) -> TiffProbe:
                 return default
             try:
                 return page.tags[name].value
-            except Exception:
+            except KeyError:
+                return default  # 无此可选标签：正常缺省，不算解析降级
+            except Exception as exc:
+                failures.append(f"标签 {name} 读取失败: {exc}")
                 return default
 
         compression, is_compressed = _compression_name(page)
@@ -565,15 +596,18 @@ def probe_tiff(path: str) -> TiffProbe:
         if page is not None:
             try:
                 photometric = str(page.photometric).split(".")[-1]
-            except Exception:
+            except Exception as exc:
+                failures.append(f"photometric 读取失败: {exc}")
                 photometric = ""
             try:
                 planarconfig = str(page.planarconfig).split(".")[-1]
-            except Exception:
+            except Exception as exc:
+                failures.append(f"planarconfig 读取失败: {exc}")
                 planarconfig = ""
             try:
                 samplesperpixel = int(page.samplesperpixel or 0)
-            except Exception:
+            except Exception as exc:
+                failures.append(f"samplesperpixel 读取失败: {exc}")
                 samplesperpixel = 0
 
         desc = str(_tag("ImageDescription", "") or "")
@@ -581,6 +615,11 @@ def probe_tiff(path: str) -> TiffProbe:
         dt = str(_tag("DateTime", "") or "")
         xres = _resolution_text(_tag("XResolution", ""))
         unit = str(_tag("ResolutionUnit", "") or "").split(".")[-1]
+
+    if failures:
+        # 降级必须可见：写日志，并把失败明细带在返回值上（调用方据此提示用户）
+        logger.warning("probe_tiff(%s): TIFF 元数据部分解析失败（%d 项）: %s",
+                       path, len(failures), "; ".join(failures))
 
     return TiffProbe(
         axes=axes, shape=shape, dtype_str=dtype_str, nbytes=nbytes, n_pages=n_pages,
@@ -591,6 +630,7 @@ def probe_tiff(path: str) -> TiffProbe:
         x_resolution=xres, resolution_unit=unit if xres else "",
         pixel_size_text=pixel_size_from_description(desc),
         file_size=file_size, file_mtime=file_mtime,
+        degraded=bool(failures), probe_errors=tuple(failures),
     )
 
 
@@ -598,11 +638,19 @@ def format_metadata_lines(probe: Optional[TiffProbe], prefix: str = "# ") -> Lis
     """把探测到的采集元数据整理成 CSV 头部注释行。"""
     if probe is None:
         return []
-    lines = [
+    lines: List[str] = []
+    if probe.degraded:
+        # 元数据解析失败时不再让字段留空误导读者（工单26 修法2）
+        detail = "; ".join(probe.probe_errors[:3])
+        if len(probe.probe_errors) > 3:
+            detail += f"（等共 {len(probe.probe_errors)} 项）"
+        lines.append(
+            f"{prefix}警告: TIFF 元数据部分解析失败（{len(probe.probe_errors)} 项），"
+            f"下方布局信息中的『未知/0』可能是解析失败所致而非真实值: {detail}")
+    lines.append(
         f"{prefix}TIFF 布局: axes={probe.axes or '未知'}, 页数={probe.n_pages}, "
         f"photometric={probe.photometric or '未知'}, planar={probe.planarconfig or '未知'}, "
-        f"通道数={probe.samplesperpixel or 1}, 压缩={probe.compression}",
-    ]
+        f"通道数={probe.samplesperpixel or 1}, 压缩={probe.compression}")
     if probe.software:
         lines.append(f"{prefix}采集软件: {probe.software}")
     if probe.datetime:
@@ -666,14 +714,26 @@ def open_tiff_stack_ex(path: str, probe: Optional[TiffProbe] = None,
     维度规范化规则同 :func:`normalize_tiff_array_ex`。
     """
     axes = probe.axes if probe is not None else ""
-    if probe is None:
+    axes_unknown = False
+    if probe is not None:
+        # 元数据降级时 axes 可能为空：显式告知 normalize 走保守分支（输出 note），
+        # 避免把"解析失败"误当"文件本来就没有 axes"而静默按灰度堆叠（工单26 修法4）
+        axes_unknown = bool(probe.degraded) and not probe.axes
+    else:
         try:
             axes = probe_tiff(path).axes
-        except Exception:
+        except (tifffile.TiffFileError, OSError) as exc:
+            # probe_tiff 契约只抛这两种（见其 docstring）；探测是加载前的优化，
+            # 失败不拦截加载（随后读取会给出真实错误），但 axes 缺失要留痕。
+            logger.warning(
+                "open_tiff_stack_ex(%s): 预读 axes 失败（%s），"
+                "维度规范化将按无 axes 启发式进行", path, exc)
             axes = ""
 
     try:
-        raw = tifffile.memmap(path)
+        # 显式只读映射：tifffile.memmap 默认 'r+'（可写），会对用户原始
+        # 数据打开写句柄，且在 Windows 上更易触发文件锁/共享冲突。
+        raw = tifffile.memmap(path, mode="r")
         mode = "内存映射"
     except ValueError:
         # 压缩 TIFF（LZW/Deflate/JPEG 等）不支持 memmap，整卷读入内存。
@@ -685,7 +745,8 @@ def open_tiff_stack_ex(path: str, probe: Optional[TiffProbe] = None,
         mode = "整卷载入（memmap 不可用，已回退为内存读取）"
 
     try:
-        arr, notes = normalize_tiff_array_ex(raw, axes=axes, force_frames=force_frames)
+        arr, notes = normalize_tiff_array_ex(raw, axes=axes, force_frames=force_frames,
+                                             axes_unknown=axes_unknown)
     except ValueError:
         del raw
         raise

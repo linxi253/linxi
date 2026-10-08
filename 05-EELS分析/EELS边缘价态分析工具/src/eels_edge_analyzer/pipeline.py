@@ -40,6 +40,7 @@ from .models import (
     ProgressCallback,
     RegionResult,
     jsonable,
+    validate_paired_energy_axes,
 )
 from .processing import (
     auto_orientation_confident,
@@ -301,6 +302,7 @@ def _run_sensitivity(
         regularizations,
         config.low_loss_baseline_ev,
         config.zlp_window_ev,
+        high_energy_ev=high_energy_ev,
         cancel=cancel,
         pixel_indices=sensitivity_pixels,
     )
@@ -445,6 +447,9 @@ def run_analysis(
         raise ValueError("无法确认 EELS 能量轴位于第一个维度。")
     _validate_ascending_energy(low.energy_ev, "低损对象")
     _validate_ascending_energy(high.energy_ev, "高损对象")
+    # R1：形状一致不等于能量栅格一致。低/高损色散不同时，Fourier-ratio 会把
+    # 按低损索引构造的核与高损谱在错误频率尺度上相乘，且不报错。
+    validate_paired_energy_axes(low.energy_ev, high.energy_ev)
     y_step_nm, x_step_nm, step_diagnostics = spatial_steps_nm(high)
     tags = all_tags(config.input_path)
     registered_survey = register_survey_to_si(survey, tags, high.data.shape[1:])
@@ -495,6 +500,7 @@ def run_analysis(
         config.deconvolution_regularization,
         config.low_loss_baseline_ev,
         config.zlp_window_ev,
+        high_energy_ev=high.energy_ev,
         cancel=cancel,
     )
     check_cancel(cancel)

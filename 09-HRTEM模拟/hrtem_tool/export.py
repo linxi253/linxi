@@ -1,6 +1,6 @@
 """结果导出：PNG / 16-bit TIFF（参数写入 ImageDescription）/ NPY / 参数 JSON。
 
-TIFF 描述串沿用 20260820 交付惯例：
+TIFF 描述串沿用旧交付基线的惯例：
   "Fe3O4 [110]; t=3.58 nm; df=-34.0 nm; 200 kV; Cs=0.085 mm; aperture=24 mrad; ..."
 """
 

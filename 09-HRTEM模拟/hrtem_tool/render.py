@@ -1,6 +1,6 @@
 """图像后处理渲染：面内旋转/镜像/重采样、对比度、标尺。
 
-oriented_image 与 20260820 验收脚本中的 oriented_rect 语义一致：
+oriented_image 与旧验收脚本中的 oriented_rect 语义一致：
 周期延拓 → 镜像 → 三次样条旋转（wrap 边界）→ 中心裁剪，无缝拼缝。
 """
 
@@ -54,7 +54,7 @@ def oriented_image(
     ----
     输出为中心裁剪：输入视场先重采样到 output_shape+16 px 再裁回
     output_shape，因此输出视场 ≈ 输入 FOV × output/(output+16)（约 1–2%）。
-    该约定与 20260820 验收口径耦合（实验匹配中的采样标度已含此效应），
+    该约定与旧验收口径耦合（实验匹配中的采样标度已含此效应），
     修改会破坏既有标定，请勿轻易改动。
     """
     if output_sampling_a != 0 and not (

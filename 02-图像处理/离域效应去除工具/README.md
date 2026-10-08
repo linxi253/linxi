@@ -10,9 +10,8 @@ CTF 离域（delocalization）后扩散到晶体外的分量。本工具让你**
 
 ## 直接运行
 
-```text
-dist/DelocCleaner.exe
-```
+本仓库不含构建产物（无 `dist/` 目录），历史上分发的 `dist/DelocCleaner.exe` 未随仓库分发。
+需要 exe 请用项目内环境自行打包（见下文 `build.bat` / spec 说明）。
 
 ## 从源码运行
 
@@ -159,8 +158,10 @@ python .\validate_real_data.py         # 不带参数 = 合成数据自检 + 不
 ```
 
 `validate_real_data.py` 没有内置的默认数据路径；走真实数据时通过 `--input`
-指定图像，那条路径额外需要 `scikit-image`（只用于轮廓提取）：
-`python -X utf8 -m pip install scikit-image`。
+指定图像，那条路径额外需要 `scikit-image`（只用于轮廓提取；已列入
+`requirements-dev.lock.txt`，按锁安装的 `.venv-build` 自带）。若环境缺它，
+用本项目的 venv 解释器安装，不要用 PATH 上的裸 `python`：
+`.\.venv-build\Scripts\python -X utf8 -m pip install scikit-image`。
 退出码：`0` = 真实数据校验全部通过；`3` = 仅合成自检通过（只证明算法
 不变量，不代表真实数据处理正确）；`1` = 有不变量未通过。CI/批处理
 不要把 3 当成真实验证的通过。
@@ -196,7 +197,7 @@ PyInstaller 打包，产物为 `dist\DelocCleaner.exe`。
   与原一次性脚本结果的差异 `mean=1.36 / p99=12.6`（差异只来自边缘过渡形状，
   旧脚本用自动阈值掩膜，本工具用距离场羽化掩膜）
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

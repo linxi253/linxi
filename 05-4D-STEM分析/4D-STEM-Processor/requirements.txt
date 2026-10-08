@@ -7,5 +7,8 @@ matplotlib>=3.7,<4
 ncempy>=1.8,<2
 
 # Development / packaging
-pytest>=8.0,<9
+# pytest 上界曾为 <9，但 requirements.lock.txt 钉的是 pytest==9.1.1，
+# 本地 .venv 与 CI 实际都在 9.x 上运行并通过全部测试——按现实放宽到
+# <10（8.x 与 9.x 均在验证口径内，以锁文件/CI 实跑为准）。
+pytest>=8.0,<10
 pyinstaller>=6.0,<7

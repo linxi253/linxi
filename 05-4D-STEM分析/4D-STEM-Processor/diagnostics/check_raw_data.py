@@ -5,14 +5,34 @@ import numpy as np
 import os
 import sys
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import dm4_io
 
+
+def _require_env(name: str, hint: str) -> str:
+    """缺环境变量即报错并打印用法；脚本不内置任何本机默认路径。"""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise SystemExit(
+            f'[check_raw_data] 缺少环境变量 {name}（{hint}）。\n'
+            f'用法：先设置环境变量再重跑，例如：\n'
+            f'  PowerShell: $env:{name} = \'<路径>\'\n'
+            f'  cmd:        set {name}=<路径>')
+    return value
+
+
 def main():
     # Check the raw DM4 file
-    BASE = os.environ.get('STEM4D_DATA',
-                          r'D:\data\4dSTEM\20260707-Au')
-    dm4_path = os.path.join(BASE, 'SI data (19)', '007_STEM SI.dm4')
+    dm4_path = _require_env('STEM4D_DM4', '待检查的原始 DM4 文件完整路径')
 
     # Read the offset and dtype from the DM4 header itself.
     if os.path.exists(dm4_path):
@@ -52,8 +72,11 @@ def main():
             arr = np.frombuffer(raw_bytes[:1000], dtype=dtype)
             print(f'  {dtype_name}: first 10 = {arr[:10]}')
             print(f'    min={arr.min():.2f}, max={arr.max():.2f}, mean={arr.mean():.2f}')
-        except:
-            pass
+        except (ValueError, TypeError) as exc:
+            # 诊断脚本吞掉异常等于吞掉诊断结论：dtype 解释失败必须打印出来。
+            # 原为裸 except（连 KeyboardInterrupt 一并吞掉），现收窄到
+            # ValueError/TypeError（字节长度不足/空数组统计会抛 ValueError）。
+            print(f'  {dtype_name}: 解释失败（{exc}）')
 
     # Check if there's a pattern
     print(f'\n[2] Checking for patterns...')
@@ -72,8 +95,8 @@ def main():
 
     # Check the extracted data
     print(f'\n[4] Checking extracted data...')
-    extracted_path = os.path.join(BASE, 'analysis', 'data', 'Au_crop128.npy')
-    if os.path.exists(extracted_path):
+    extracted_path = os.environ.get('STEM4D_EXTRACTED_NPY', '').strip()
+    if extracted_path and os.path.exists(extracted_path):
         data = np.load(extracted_path)
         print(f'  Shape: {data.shape}')
         print(f'  Min: {data.min():.1f}, Max: {data.max():.1f}')
@@ -92,6 +115,10 @@ def main():
         print(f'    Center 4x4 mean: {dp[14:18, 14:18].mean():.1f}')
         print(f'    Edge 4x4 mean: {dp[0:4, 0:4].mean():.1f}')
         print(f'    Ratio: {dp[14:18, 14:18].mean() / dp[0:4, 0:4].mean():.3f}')
+    elif extracted_path:
+        print(f'  File not found: {extracted_path}')
+    else:
+        print('  Skipped (set STEM4D_EXTRACTED_NPY to the extracted .npy to enable)')
 
     # Try reading with different offsets to find the actual data
     print(f'\n[5] Searching for correct data offset...')
@@ -121,10 +148,10 @@ def main():
             print(f'  DM4 magic number: Unknown ({header[:4].hex()})')
 
     print(f'\n[7] Checking standard data for comparison...')
-    STANDARD_DIR = os.environ.get('STEM4D_STANDARD',
-                                  r'D:\data\4dSTEM\standard\data')
-    standard_path = os.path.join(STANDARD_DIR, 'Cu foil-grain boundary.dm4')
-    if os.path.exists(standard_path):
+    standard_dir = os.environ.get('STEM4D_STANDARD', '').strip()
+    standard_path = os.path.join(standard_dir, 'Cu foil-grain boundary.dm4') \
+        if standard_dir else ''
+    if standard_path and os.path.exists(standard_path):
         with open(standard_path, 'rb') as f:
             # Find data offset (this is known to work)
             # From previous analysis: offset=156783 for Cu foil
@@ -132,6 +159,8 @@ def main():
             cu_data = np.frombuffer(f.read(2000), dtype=np.dtype('>u2'))
             print(f'  Cu foil at offset 156783: mean={cu_data.mean():.1f}, std={cu_data.std():.1f}')
             print(f'    first 10: {cu_data[:10]}')
+    else:
+        print('  Skipped (set STEM4D_STANDARD to the standard-data directory to enable)')
 
 
 if __name__ == '__main__':

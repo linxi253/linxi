@@ -1,5 +1,5 @@
 # 运行环境锁定（自动生成，请勿手改）
-# 来源：.venv-build 在干净 venv 中解析；Python 3.10.9
+# 来源：requirements-dev.txt 在干净 venv 中解析；Python 3.10.9
 # 复现：python -m venv .venv-build; .venv-build\Scripts\python -X utf8 -m pip install -r requirements-dev.lock.txt
 
 altgraph==0.17.5

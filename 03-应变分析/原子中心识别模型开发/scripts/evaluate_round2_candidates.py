@@ -16,6 +16,15 @@ import sys
 import numpy as np
 from scipy.spatial import cKDTree
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -29,12 +38,34 @@ RUN = ROOT / 'runs/training-update-20260910'
 REVIEW = ROOT / 'runs/reviewed-test-20260910'
 MANIFEST = ROOT / 'runs/target-adaptation-20260910/target_adaptation_onnx/model_manifest.json'
 DATASET = ROOT / 'data/processed/real_workflow_20260909_v2'
-FLOORS = {4: {'tp': 189, 'fp': 0, 'fn': 2}, 5: {'tp': 1114, 'fp': 16, 'fn': 18}}
-GUARDRAILS = {'val_f1_min': 0.9648212226066898 - 0.002, 'train_f1_min': 0.9161686495970174 - 0.002,
-              'val_f1_baseline': 0.9648212226066898, 'train_f1_baseline': 0.9161686495970174,
-              'min_region_recall_baseline': {'train': 0.2892857142857143, 'val': 0.7787234042553192},
-              'min_region_recall_drop_limit': 0.05}
+# Audit 35: the acceptance floors and regression guardrails are derived from
+# unpublished experiment results, so they are read from configs/local/ (gitignored)
+# on the machine that owns the data, never hardcoded in the public repository.
+LOCAL_RECORDS = ROOT / 'configs/local/experiment_records.json'
+REQUIRED_GUARDRAIL_KEYS = ('val_f1_min', 'train_f1_min',
+                           'min_region_recall_baseline', 'min_region_recall_drop_limit')
 METRIC_KEYS = ('tp', 'fp', 'fn', 'precision', 'recall', 'f1', 'rmse_px', 'p95_px')
+
+
+def round2_thresholds():
+    path = LOCAL_RECORDS
+    if not path.is_file():
+        raise SystemExit(f'missing local experiment records: {path}; copy '
+                         'configs/local/experiment_records.example.json and fill in the '
+                         'evaluate_round2_candidates section on the machine that owns '
+                         'the data (audit 35: unpublished metrics stay out of the repository)')
+    payload = json.loads(path.read_text(encoding='utf-8-sig'))
+    section = payload.get('evaluate_round2_candidates') or {}
+    try:
+        floors = {int(number): dict(counts) for number, counts in section['floors'].items()}
+        guardrails = dict(section['guardrails'])
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise SystemExit(f'{path} lacks a valid evaluate_round2_candidates '
+                         'section (floors keyed by image number plus guardrails)') from None
+    missing = [key for key in REQUIRED_GUARDRAIL_KEYS if key not in guardrails]
+    if missing:
+        raise SystemExit(f'{path} guardrails lack required keys: {missing}')
+    return floors, guardrails
 
 
 def build(manifest, window=None, gate=None):
@@ -88,6 +119,7 @@ def regression(pipeline):
 
 
 def main():
+    FLOORS, GUARDRAILS = round2_thresholds()
     candidates = [
         ('baseline_gaussian11_conf0.1', 'round-1 accepted configuration, no gate', build(MANIFEST)),
         ('C1_gaussian11_fitgate', 'keep the coarse detection where the gaussian fit residual is in the '

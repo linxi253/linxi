@@ -5,7 +5,9 @@ tem_sim 物理正确性验证（重构自 SimulaTEM 后的自检）。
   1. 相对论电子波长（300 kV ≈ 0.01969 Å）
   2. 相互作用参数 σ（300 kV ≈ 6.5262e-4 rad/(V·Å)）
   3. 散射因子 f_e(0) = Σ a_i
-  4. 单原子相位核的傅里叶变换 ≈ γλ·f_e(g)（解析关系数值验证）
+  4. 单原子相位核的傅里叶变换 ≈ γλ·f_e(g)/(Δx·Δy)（解析关系数值验证）
+  4b. 投影势相位绝对标度：单 Au 原子解析峰值 γλ·π·Σ(a_i/b_i) = 3.4713 rad
+      （与采样无关；2026-10 相位标度修正的回归判据）
   5. Multislice 波函数的幺正性（|ψ|² 总强度守恒）
   6. Scherzer 离焦与点分辨率（Williams-Carter 公式）
   7. [110] 带轴重构保持原子密度（防止含负分量的新晶胞漏原子）
@@ -74,22 +76,65 @@ def test_phase_kernel_fft():
         kh, kw = k.shape
         i0, j0 = n // 2 - kh // 2, n // 2 - kw // 2
         grid[i0 : i0 + kh, j0 : j0 + kw] += k
-    # erf 核为像素积分值（rad），其 DFT 直接等于连续傅里叶变换
+    # erf 核为相位在像素上的平均值（rad），等于像素积分除以 (sx·sy)，
+    # 其 DFT 相应等于连续傅里叶变换乘同一 1/(sx·sy) 因子
     ft = np.fft.fftshift(np.abs(np.fft.fft2(grid)))
     kx = np.fft.fftshift(np.fft.fftfreq(n, d=sampling))
     g = np.abs(kx)  # 沿中心行（ky = 0）
     row = ft[n // 2]
-    # 像素积分核的 DFT 满足泊松求和模型：
-    #   DFT ≈ γλ·f_e(g)·sinc(π·g·s) + Σ_{n≠0} 混叠项。
+    # 像素平均核的 DFT 满足泊松求和模型：
+    #   DFT ≈ γλ·f_e(g)·sinc(π·g·s)/(sx·sy) + Σ_{n≠0} 混叠项。
     # 混叠在 g ≪ 1/(2s)（奈奎斯特）处可忽略；Peng 表最窄 g 项频谱较宽，
     # g 接近奈奎斯特时折叠项可达百分之几，故比对限制在 g < 15 Å⁻¹
     # （奈奎斯特 25 Å⁻¹ 的 60%，HRTEM 物镜光阑也远低于此）。
     sinc_env = np.sinc(kx * sampling)
-    fe = electron_scattering_factor("Au", g) * gl * sinc_env
+    pixel_area = sampling * sampling
+    fe = electron_scattering_factor("Au", g) * gl * sinc_env / pixel_area
     m = (fe > 1e-5 * fe.max()) & (g < 15.0)
     rel = np.max(np.abs(row[m] - fe[m]) / np.abs(fe[m]))
-    assert rel < 3e-3, f"相位核 FT 与 γλ f_e(g) 偏差过大: {rel:.3e}"
-    print(f"[OK] 相位核 FT ≈ γλ·f_e(g)·sinc（最大相对偏差 {rel:.2e}）")
+    assert rel < 3e-3, f"相位核 FT 与 γλ f_e(g)/(sx·sy) 偏差过大: {rel:.3e}"
+    print(f"[OK] 相位核 FT ≈ γλ·f_e(g)·sinc/(sx·sy)（最大相对偏差 {rel:.2e}）")
+
+
+def test_phase_scale():
+    """投影势相位的**绝对标度**（2026-10 相位标度修正的回归判据）。
+
+    相位核必须是"连续相位在像素上的平均值"，而不是"像素积分"。用单个
+    Au 原子做判定：解析峰值 φ(0) = γλ·π·Σ(a_i/b_i) = 3.4713 rad
+    （≈π，对应重原子中心透射函数近 −1 的教科书结论），且该值必须与采样
+    无关（只在像素粗到无法分辨最窄高斯项时才因带限而降低）。
+
+    同时验证求和规则 Σ_pixels φ = γλ·f_e(0)/(Δx·Δy)（采样相位的正确求和）。
+    本判据对绝对标度敏感：若把核的 /(sx·sy) 去掉（退回旧"像素积分"口径），
+    峰值随 Δx² 缩小、求和规则差 s² 倍，本测试立即失败。
+    （写法与 010-STEM模拟/tests/verify_physics.py 第 2b 项一致。）
+    """
+    gl = Microscope(voltage_kv=300.0).gamma_lambda
+    a, b = get_factors("Au")
+    phi0_analytic = gl * np.pi * float(np.sum(a / b))
+    assert abs(phi0_analytic - 3.4713) < 1e-3, phi0_analytic
+
+    fe0 = float(electron_scattering_factor("Au", 0.0))
+    st = Structure(["Au"], np.array([[20.0, 20.0, 0.5]]), cell=np.diag([40.0, 40.0, 1.0]))
+    scope = Microscope(voltage_kv=300.0)
+    peaks = {}
+    for samp in (0.4, 0.2, 0.1, 0.05, 0.02):
+        ph = projected_phase(st, scope, sampling=samp, padding=0.0)
+        peaks[samp] = float(ph.max())
+        expect = gl * fe0 / (samp * samp)
+        assert abs(ph.sum() / expect - 1.0) < 1e-4, (samp, ph.sum(), expect)
+    # 细采样必须收敛到解析峰值
+    assert abs(peaks[0.02] / phi0_analytic - 1.0) < 0.03, peaks
+    # 且必须随采样变细单调增大（若相位是"像素积分"，则会随 Δx² 减小）
+    seq = [peaks[s] for s in (0.4, 0.2, 0.1, 0.05, 0.02)]
+    assert all(x < y for x, y in zip(seq, seq[1:])), seq
+    # 旧口径（像素积分）会把 0.1 Å/px 的峰值压到 ~0.02 rad，差 ~100 倍
+    assert peaks[0.1] > 2.0, f"0.1 Å/px 下峰值仅 {peaks[0.1]:.3f} rad，相位标度仍偏小"
+    print(
+        "[OK] 4b 相位标度: 单 Au 原子峰值 "
+        + ", ".join(f"{s}Å/px→{v:.3f}" for s, v in peaks.items())
+        + f" rad（解析 {phi0_analytic:.4f}）；求和规则偏差 <1e-4"
+    )
 
 
 def test_multislice_unitarity():
@@ -185,9 +230,10 @@ def test_scattering_scale():
 
 
 def test_mean_inner_potential():
-    """平均内电位 V0：fcc Al 引擎管线值必须与表理论值一致（像素积分精确性）。
+    """平均内电位 V0：fcc Al 引擎管线值必须与表理论值一致（采样相位口径）。
 
-    V0 = ∫φ dA / (σ·V_cell)，理论值 = γλ·N·f_e(0)/(σ·V_cell)。
+    φ 是采样相位（像素平均值）→ V0 = ⟨φ⟩/(σ·t)；旧写法 Σφ/(σ·V_cell)
+    隐含"φ 是像素积分"的口径，修正标度后两者不再等价（见 test_phase_scale）。
     实验公认 V0(Al) ≈ 13.4 V；Peng 表预测 ≈ 17 V（参数化自身偏差量级），
     此处仅断言引擎与表自洽，实验对照打印供人工核查。
     """
@@ -203,7 +249,9 @@ def test_mean_inner_potential():
     scope = Microscope(voltage_kv=300.0)
     phase = projected_phase(unit, scope, sampling=0.05, padding=0.0)
     sigma = interaction_sigma(300.0)
-    v0_engine = phase.sum() / (sigma * a**3)
+    # φ 是采样相位（像素平均值）→ V0 = ⟨φ⟩/(σ·t)；旧写法 Σφ/(σ·V_cell)
+    # 隐含"φ 是像素积分"的口径，修正标度后两者不再等价（见 test_phase_scale）
+    v0_engine = float(phase.mean()) / (sigma * a)
     fe0_al = float(electron_scattering_factor("Al", 0.0))
     v0_theory = scope.gamma_lambda * 4.0 * fe0_al / (sigma * a**3)
     rel = abs(v0_engine - v0_theory) / v0_theory
@@ -221,6 +269,7 @@ if __name__ == "__main__":
     test_scattering_factor()
     test_scattering_scale()
     test_phase_kernel_fft()
+    test_phase_scale()
     test_multislice_unitarity()
     test_scherzer()
     test_zone_axis_density()

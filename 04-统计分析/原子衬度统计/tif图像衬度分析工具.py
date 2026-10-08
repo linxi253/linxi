@@ -19,6 +19,15 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 import matplotlib
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
@@ -484,12 +493,20 @@ class TIFContrastAnalyzer:
             self._reload_preserve = None
             return False
 
-        # 压缩 TIFF 需整卷载入内存，体积过大时先确认（加载前告知，避免静默 OOM）
-        if ask_confirm and probe.is_compressed and probe.nbytes > LOAD_CONFIRM_BYTES:
+        # 压缩 TIFF 需整卷载入内存，体积过大时先确认（加载前告知，避免静默 OOM）。
+        # fail-safe（工单26 修法3）：元数据解析失败时 nbytes 可能为 0，护栏条件
+        # `nbytes > 阈值` 会静默退化为 False；因此体积未知即视为超限、必须确认。
+        nbytes_known = probe.nbytes > 0
+        if ask_confirm and probe.is_compressed and (
+                not nbytes_known or probe.nbytes > LOAD_CONFIRM_BYTES):
+            size_line = (
+                f"预计占用约 {probe.size_text}（{probe.shape_text}, {probe.dtype_str}）。"
+                if nbytes_known else
+                "堆栈体积无法读取（元数据解析失败），请确认系统内存充足。")
             ok = messagebox.askyesno(
                 "确认加载",
                 f"该文件为 {probe.compression} 压缩，无法内存映射，需整卷读入内存。\n\n"
-                f"预计占用约 {probe.size_text}（{probe.shape_text}, {probe.dtype_str}）。\n"
+                f"{size_line}\n"
                 f"继续加载？")
             if not ok:
                 self.status_var.set("已取消加载")
@@ -507,6 +524,13 @@ class TIFContrastAnalyzer:
                   f"  头部: axes={probe.axes or '未知'} 形状={probe.shape_text} "
                   f"类型={probe.dtype_str} 页数={probe.n_pages} "
                   f"压缩={probe.compression} 预计体积={probe.size_text}\n")
+        if probe.degraded:
+            # 元数据解析失败时显式告知，字段空值/0 不再被误读为真实值（工单26 修法2）
+            detail = "; ".join(probe.probe_errors[:3])
+            if len(probe.probe_errors) > 3:
+                detail += f"（等共 {len(probe.probe_errors)} 项）"
+            self._log(f"  ⚠ 元数据解析失败（{len(probe.probe_errors)} 项）："
+                      f"上面显示为 未知/0 的字段不可用: {detail}\n")
         threading.Thread(target=self._load_worker,
                          args=(path, probe, force_frames), daemon=True).start()
         self._ensure_polling()

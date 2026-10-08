@@ -9,6 +9,21 @@ from scipy import ndimage
 from scipy.signal import find_peaks
 
 
+def _fold_angle_difference(ang_diff_deg):
+    """把两峰对方向的夹角绝对值 |Δ|（度，∈[0,360]）按无向语义折叠到 [0,90]。
+
+    语义（定明）：峰对 = 两衍射斑连线，无方向性——θ 与 θ+180° 视为
+    同一方向（方向模 180），故折叠区间为 [0,90] 而非 [0,180]。
+
+    必须「先对 180 取模、再取 min(d, 180-d)」：若对 |Δ|>180° 直接算
+    180-|Δ| 会得到负值（Δ=190° → -10°，Δ=270° → -90°，Δ=350° → -170°），
+    负值乘 0.1 权重后变成负惩罚，令方向完全不匹配的峰对反而得分更低、
+    被 argmin 选为最佳匹配。Δ=190° 与 Δ=350° 折叠后均为 10°。
+    """
+    d = np.asarray(ang_diff_deg, dtype=float) % 180.0
+    return np.minimum(d, 180.0 - d)
+
+
 def _robust_threshold(dp, threshold_frac):
     """组合阈值：max 的 fraction 与 mean+2σ 取较大者。
 
@@ -173,13 +188,16 @@ def peak_pairs_mapping(datacube, center, alpha, n_peaks=10,
                 continue
 
             # Score every (reference, local) pair at once:
-            # score = |dist diff| + 0.1 * wrapped angle diff (degrees).
+            # score = |dist diff| + 0.1 * folded angle diff (degrees,
+            # undirected: folded to [0,90] by direction mod 180 — see
+            # _fold_angle_difference; a bare min(d,180-d) here would go
+            # negative for |Δ|>180° and rank anti-parallel pairs best).
             lp_dist = np.array([lp['distance'] for lp in local_pairs])
             lp_ang = np.array([lp['angle'] for lp in local_pairs])
             lp_int = np.array([lp['intensity_product'] for lp in local_pairs])
 
-            ang_diff = np.abs(lp_ang[None, :] - ref_ang)
-            ang_diff = np.minimum(ang_diff, 180.0 - ang_diff)
+            ang_diff = _fold_angle_difference(
+                np.abs(lp_ang[None, :] - ref_ang))
             scores = np.abs(lp_dist[None, :] - ref_dist) + ang_diff * 0.1
 
             best = scores.argmin(axis=1)

@@ -74,13 +74,33 @@ LATTICE_CONDITION_GUIDANCE = {
 }
 
 
+def validate_max_condition(value: float, *, label: str = "max_condition") -> float:
+    """Validate a lattice condition-number limit and return it as ``float``.
+
+    阈值必须为**有限正数**。``NaN``/``inf`` 会让 ``condition > max_condition``
+    恒为 False，从而静默绕过所有病态基矢检查；``0``/负值则会把一切合法基矢都
+    判为病态。两种情况都在任何计算发生前给出明确错误。
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise AnalysisError(f"{label} must be a finite positive number, got {value!r}.") from exc
+    if not np.isfinite(number):
+        raise AnalysisError(f"{label} must be a finite positive number, got {value!r}.")
+    if number <= 0:
+        raise AnalysisError(f"{label} must be a finite positive number, got {value!r}.")
+    return number
+
+
 def validate_reference_lattice(a_vec: Iterable[float], b_vec: Iterable[float], *, max_condition: float = 30.0) -> float:
     """Validate two non-collinear reference lattice vectors and return condition number.
 
     ``max_condition`` 可按 ``LATTICE_CONDITION_GUIDANCE`` 的指导按体系放宽/收紧;
     默认 30.0。条件数超限通常意味着两矢量接近共线或长度悬殊, 此时
     lattice-index 分配与局部应变的数值噪声都会被放大。
+    阈值本身必须是有限正数（见 :func:`validate_max_condition`）。
     """
+    limit = validate_max_condition(max_condition)
     lattice = np.column_stack((np.asarray(a_vec, dtype=float), np.asarray(b_vec, dtype=float)))
     if lattice.shape != (2, 2) or not np.isfinite(lattice).all():
         raise AnalysisError("Reference lattice vectors must be two finite 2-D vectors.")
@@ -88,10 +108,10 @@ def validate_reference_lattice(a_vec: Iterable[float], b_vec: Iterable[float], *
     if min(length_a, length_b) <= 1e-12:
         raise AnalysisError("Reference lattice vectors must have non-zero length.")
     condition = float(np.linalg.cond(lattice))
-    if not np.isfinite(condition) or condition > max_condition:
+    if not np.isfinite(condition) or condition > limit:
         raise AnalysisError(
             f"Reference lattice is ill-conditioned (condition number {condition:.1f} > "
-            f"{max_condition}); choose two well-separated directions with comparable "
+            f"{limit}); choose two well-separated directions with comparable "
             "lengths (included angle far from 0°/180°)."
         )
     return condition
@@ -235,6 +255,7 @@ def compute_local_peak_pair_strain(
     deformed_positions: Iterable[Iterable[float]],
     *,
     equivalent_coefficient: float = 4.0 / 9.0,
+    max_condition: float = LATTICE_CONDITION_GUIDANCE["general"],
 ) -> StrainResult:
     """Compute local deformation gradients while retaining every accepted atom.
 
@@ -243,6 +264,11 @@ def compute_local_peak_pair_strain(
     affine fit using available one-step lattice neighbours (grades B/C).  A
     geometrically underdetermined site stays in the output with NaN strain and
     an explicit invalid reason; it is never silently removed.
+
+    ``max_condition`` is the same lattice condition-number limit used by
+    :func:`validate_reference_lattice`; callers must pass the *same* value to
+    both so a user-raised tolerance is not silently re-rejected here (default
+    30.0, see ``LATTICE_CONDITION_GUIDANCE``).
 
     Examples
     --------
@@ -256,6 +282,7 @@ def compute_local_peak_pair_strain(
         result = compute_local_peak_pair_strain(indices, ref, deformed)
         assert np.allclose(result.small_xx[result.quality_mask], 0.05)
     """
+    condition_limit = validate_max_condition(max_condition)
     indices = np.asarray(lattice_indices, dtype=int)
     reference = _as_points(reference_positions, "reference_positions")
     deformed = _as_points(deformed_positions, "deformed_positions")
@@ -286,7 +313,7 @@ def compute_local_peak_pair_strain(
             def_a = 0.5 * (deformed[plus_a] - deformed[minus_a])
             def_b = 0.5 * (deformed[plus_b] - deformed[minus_b])
             DX = np.column_stack((ref_a, ref_b))
-            if abs(np.linalg.det(DX)) > 1e-12 and np.linalg.cond(DX) <= 30:
+            if abs(np.linalg.det(DX)) > 1e-12 and np.linalg.cond(DX) <= condition_limit:
                 gradients[i] = np.column_stack((def_a, def_b)) @ np.linalg.inv(DX)
                 quality_mask[i] = True
                 site_quality[i] = "A-symmetric"
@@ -316,7 +343,7 @@ def compute_local_peak_pair_strain(
             continue
         weights = 1.0 / distances
         weighted_ref = ref_delta * np.sqrt(weights)[:, None]
-        if np.linalg.cond(weighted_ref) > 30:
+        if np.linalg.cond(weighted_ref) > condition_limit:
             invalid_reasons[i] = "ill_conditioned_neighbor_geometry"
             continue
         weighted_def = def_delta * np.sqrt(weights)[:, None]

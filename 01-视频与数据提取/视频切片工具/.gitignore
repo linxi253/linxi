@@ -1,40 +1,11 @@
-# ─── Python ───
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
+# 本目录特有规则；通用 Python/构建/媒体忽略规则见仓库根 .gitignore。
 
-# ─── 虚拟环境 ───
-.venv/
-venv/
-
-# ─── 构建产物 ───
-build/
-dist/
-
-# ─── FFmpeg 二进制（体积大，按 tools/ffmpeg/README.md 自行放置）───
-tools/ffmpeg/*.exe
-tools/ffmpeg/*.dll
+# ─── FFmpeg 运行时放置区（体积大，按 tools/ffmpeg/README.md 自行放置）───
+# tools/ffmpeg/*.exe、*.dll、tools/*.zip、*.7z、7zr.exe 已由根 *.exe/*.dll/*.zip/*.7z 覆盖
 tools/_ffmpeg_extract*/
-tools/*.zip
-tools/*.7z
 tools/*.download
-tools/7zr.exe
 # 保留来源与许可证说明文档
 !tools/ffmpeg/README.md
 !tools/ffmpeg/README.txt
 !tools/ffmpeg/PROVENANCE.md
 !tools/ffmpeg/THIRD_PARTY_NOTICES.md
-
-# ─── 运行时产物 ───
-.partial/
-*.partial
-
-# ─── IDE / 系统 ───
-.idea/
-.vscode/
-Thumbs.db
-Desktop.ini
-
-# ─── ZCode 会话产物 ───
-.zcode/

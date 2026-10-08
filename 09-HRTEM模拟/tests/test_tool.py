@@ -43,7 +43,26 @@ def test_params_validate_rejects(kw):
 
 
 def test_params_validate_accepts_defaults():
-    SimParams().validate()  # 默认值必须合法
+    """默认参数除「不抛异常」外，关键数值字段还须落在各自的合法区间。
+
+    仅靠 validate() 不抛异常只能发现「构造即崩」；若默认值被改成
+    仍能通过校验但语义上失真的值（审计条目 68），需要显式断言兜底。
+    """
+    p = SimParams()
+    p.validate()  # 默认值必须合法
+    assert p.thickness_nm > 0
+    assert p.voltage_kv > 0
+    assert p.target_xy_a > 0
+    assert p.sampling_a > 0
+    assert p.slice_thickness_a > 0
+    assert p.output_sampling_a >= 0
+    assert p.aperture_mrad >= 0
+    assert p.focal_spread_a >= 0
+    assert p.angular_spread_mrad >= 0
+    assert p.display_blur_a >= 0
+    assert p.gpts_mode in ("auto", "256", "512", "1024")
+    assert p.table in ("peng", "gauss3")
+    assert 0.0 <= p.display_lo_pct < p.display_hi_pct <= 100.0
 
 
 def test_params_from_dict_coercion():
@@ -213,20 +232,29 @@ def test_export_all_roundtrip(tmp_path):
     assert arr.dtype == np.float32 and arr.shape == (16, 16)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows 目录只读属性被系统忽略，无法触发")
-def test_export_all_permission_error(tmp_path):
-    import os as _os
+def test_export_all_permission_error(tmp_path, monkeypatch):
+    """输出目录不可写时 export_all 必须抛 PermissionError（export.py 的 W_OK 守卫）。
 
+    原实现靠 POSIX chmod 0o500 触发并 skipif Windows，但 CI 只在
+    windows-latest 上跑（Windows 忽略目录只读属性），该失败路径此前
+    被整体跳过、零覆盖。现用 monkeypatch 模拟 chmod 的语义——
+    os.access(dir, W_OK) == False（正是该守卫的触发条件）——任何平台
+    都能覆盖，不再依赖操作系统行为。
+    """
     from hrtem_tool.export import export_all
 
     out = tmp_path / "ro"
     out.mkdir()
-    out.chmod(0o500)  # 去掉写权限（POSIX）
-    try:
-        with pytest.raises(PermissionError):
-            export_all(_fake_result(), out, "x", {"png": True})
-    finally:
-        out.chmod(0o700)  # 恢复，便于清理
+    real_access = os.access
+
+    def deny_write(path, mode, *args, **kwargs):
+        if mode == os.W_OK and Path(path) == out:
+            return False  # 模拟只读目录（POSIX chmod 0o500 的效果）
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("hrtem_tool.export.os.access", deny_write)
+    with pytest.raises(PermissionError, match="不可写"):
+        export_all(_fake_result(), out, "x", {"png": True})
 
 
 # ----------------------------------------------------------------------

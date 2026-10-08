@@ -17,6 +17,16 @@ from main import FilterApp
 from tif_io import ProcessingCancelled, TifDocument, safe_output_path
 from version import __version__
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 
 def write_stack(path, frames=7):
     data = np.random.default_rng(261).integers(0, 256, (frames, 24, 31), dtype=np.uint8)

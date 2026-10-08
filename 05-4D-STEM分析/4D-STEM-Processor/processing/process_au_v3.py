@@ -5,6 +5,15 @@ Uses correctly extracted data (int16 little-endian) with proper handling of nega
 import numpy as np
 import os, sys, time, json, argparse
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.dpc_core import (compute_com_fast, find_alpha_from_radial,
@@ -17,12 +26,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # Configuration
-DEFAULT_BASE = os.environ.get(
-    'STEM4D_DATA', r'D:\data\4dSTEM\20260707-Au')
+# 不内置任何本机默认数据路径：数据目录必须经 STEM4D_DATA /
+# STEM4D_ANALYSIS_DATA 环境变量或命令行参数提供，缺失时报错并打印用法。
+DEFAULT_BASE = os.environ.get('STEM4D_DATA', '').strip()
 DATA_DIR = os.environ.get(
-    'STEM4D_ANALYSIS_DATA', os.path.join(DEFAULT_BASE, 'analysis', 'data'))
+    'STEM4D_ANALYSIS_DATA', '').strip() or (
+    os.path.join(DEFAULT_BASE, 'analysis', 'data') if DEFAULT_BASE else '')
 OUTPUT_DIR = os.environ.get(
-    'STEM4D_OUTPUT', os.path.join(DEFAULT_BASE, 'analysis', 'results', 'v2'))
+    'STEM4D_OUTPUT', '').strip() or (
+    os.path.join(DEFAULT_BASE, 'analysis', 'results', 'v2') if DEFAULT_BASE
+    else '')
 
 def get_datasets(data_dir):
     """Au datasets - using correctly extracted data."""
@@ -417,6 +430,13 @@ def main(argv=None):
     parser.add_argument('--output-dir', default=OUTPUT_DIR,
                         help='Directory for results.')
     args = parser.parse_args(argv)
+
+    if not args.data_dir:
+        parser.error('未配置数据目录：请传 --data-dir，或设置环境变量 '
+                     'STEM4D_ANALYSIS_DATA / STEM4D_DATA 后重跑')
+    if not args.output_dir:
+        parser.error('未配置输出目录：请传 --output-dir，或设置环境变量 '
+                     'STEM4D_OUTPUT / STEM4D_DATA 后重跑')
 
     DATA_DIR = args.data_dir
     OUTPUT_DIR = args.output_dir

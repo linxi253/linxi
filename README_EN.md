@@ -33,7 +33,7 @@ Versions are taken from each tool's code constants (`__version__` / `pyproject.t
 | Statistics | TIF atomic contrast statistics | 2.5.0 | `04-统计分析/原子衬度统计` | `tif图像衬度分析工具.py` |
 | Statistics | HAADF-STEM feature-region evolution | 2026.09.2 | `04-统计分析/特征区域演化分析` | `应力面积统计.py` |
 | Statistics | TIFF area measurement | — | `04-统计分析/统计面积` | `统计面积.py` |
-| Statistics | Crystalline/amorphous region statistics | 5.3 | `04-统计分析/非晶面积统计/pythonProject` | `main.py` |
+| Statistics | Crystalline/amorphous region statistics | 5.3 | `04-统计分析/非晶面积统计` | `main.py` |
 | 4D-STEM | 4D-STEM Processor | 2.2.0 | `05-4D-STEM分析/4D-STEM-Processor` | `stem_processor_gui.py` |
 | EELS spectroscopy | EELS edge valence analysis | 0.2.0 | `05-EELS分析/EELS边缘价态分析工具` | `run.py` |
 | HRTEM simulation | HRTEM multislice simulation (tem_sim engine) | 1.2.0 | `09-HRTEM模拟` | `run.bat` |
@@ -56,8 +56,14 @@ Versions are taken from each tool's code constants (`__version__` / `pyproject.t
 - [10-DSH集成](10-DSH集成/README.md): TEM video pipeline driven inside DeepSeek Harness sessions.
 - [全整合](全整合/README.md): source of the TEM Suite integration layer (tool tree + tabs).
 
-> Numbering note: there are two `05-` directories (4D-STEM and EELS) for historical reasons.
-> They were not renumbered, to avoid breaking relative references inside each tool.
+> Numbering note: numbers reflect the order in which directories joined the workspace and are
+> **not contiguous** — `07` and `08` were never created (`08-历史版本` in some older documents
+> refers to an off-repository local archive; no such directory exists in the repository).
+> There are two `05-` directories (4D-STEM and EELS) for historical reasons; they were not
+> renumbered, to avoid breaking relative references inside each tool. `010-STEM模拟` uses a
+> three-digit number meaning "group 10": it sorts lexicographically between `01-` and `02-`,
+> and is unrelated to `10-DSH集成` (a STEM simulation engine vs. a TEM video pipeline); the
+> name is kept for compatibility with hard-coded paths (全整合/temsuite/registry.py, .tools, CI).
 
 ## Running from Source
 
@@ -80,7 +86,7 @@ Then always launch with the project's own interpreter:
 .venv\Scripts\python <entry script.py>
 ```
 
-`09-HRTEM模拟`, `010-STEM模拟` and `原子识别纯算法` provide a `run.bat` — double-click to launch.
+`09-HRTEM模拟` and `010-STEM模拟` provide a `run.bat`; `原子识别纯算法`'s launcher is `启动原子识别工具.bat` — double-click to launch.
 
 Projects with a `.spec` file can be re-packaged with PyInstaller **inside the project's own environment**:
 
@@ -111,9 +117,19 @@ This repository is **MIT** (see [LICENSE](LICENSE)), applying to the original co
 GPL-3.0 is contagious: bundling it with the rest of the code into **a single work** for distribution
 requires re-examining the whole under GPL-3.0; merely hosting them side by side in one repository
 and distributing them independently is unaffected.
+`全整合` (TEM Suite) loads strainpp **in-process via `import`**; if the two are packaged
+into a single executable for distribution, verify GPL compliance first.
 
-Per-tool licenses, third-party dependencies, and third-party material **deliberately not included**
-are listed in [NOTICE.md](NOTICE.md).
+**Exception: GPL-3.0 third-party components inside released executables.**
+The released executables of `05-EELS分析/EELS边缘价态分析工具` and `全整合` both bundle
+**`ncempy` (GPL-3.0-or-later)**. Distribution of those executables remains bound by GPL-3.0
+for that component, regardless of this project's MIT declaration; the obligations and
+workarounds are spelled out in each directory's `THIRD_PARTY_NOTICES.md`.
+Additionally, `data/peng_high.json` in `09-HRTEM模拟` and `010-STEM模拟` comes from
+**abTEM (GPL-3.0)**.
+
+Per-tool licenses, third-party dependencies, data-file provenance, and third-party material
+**deliberately not included** are listed in [NOTICE.md](NOTICE.md).
 
 ## Citation and contributing
 

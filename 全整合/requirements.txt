@@ -14,7 +14,10 @@ seaborn==0.13.2
 openpyxl==3.1.5
 imagecodecs==2025.3.30
 defusedxml==0.7.1
-ttkbootstrap>=1.10
+# 代码与 TEMSuite.spec 按 2.x 编写（主题 assets/ 打包、Window API），
+# 1.x 会在 Window() 初始化时失败，故下限必须为 2（回归 2026-10-03 R3 裁决：
+# 采纳主源码的范围约束；候选原为 >=1.10，与 spec 的 assets 收集不匹配）
+ttkbootstrap>=2,<3
 ncempy>=1.16
 # drift-correction-v7 的拖拽支持（未安装时该工具自动回退普通 Tk）
 tkinterdnd2==0.6.2

@@ -106,7 +106,7 @@ python -m unittest discover -s tests -v
 - 校准统计只使用 ROI 可靠的点击点（贴边或无效 ROI 会被剔除）；参数确认窗口会显示实际参与统计的样本数，样本峰值与噪声接近时会提示低对比度。
 - 手动添加点会按当前 COM/二维高斯参数做一次亚像素精炼，因此 CSV 中的位置可能与鼠标点击位置略有不同；手动添加的原子在 CSV"来源"列标记为"手动"。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

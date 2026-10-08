@@ -23,6 +23,15 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import matplotlib
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 try:
     matplotlib.use("TkAgg")
 except Exception:
@@ -2231,8 +2240,13 @@ class AtomicRecognitionApp:
         except queue.Empty:
             pass
         except Exception:
-            # 任何单条消息的处理异常都不允许终止轮询，否则界面会永久卡在忙碌状态。
+            # 任何单条消息的处理异常都不允许终止轮询，也不允许界面永久卡在忙碌状态：
+            # 兜底分支同样要恢复 _busy，否则按钮保持禁用，用户只能重启程序。
             _log_exception("后台任务消息处理失败", True)
+            try:
+                self._set_busy(False)
+            except tk.TclError:
+                pass
             try:
                 self.status.config(text="内部错误：任务消息处理失败，详情已写入日志")
             except tk.TclError:
@@ -2468,9 +2482,43 @@ class AtomicRecognitionApp:
 
     @staticmethod
     def _part_path(path: str | Path) -> Path:
-        """原子写入的临时同目录路径：写入成功后 os.replace 到目标。"""
+        """原子写入的临时同目录路径：写入成功后 os.replace 到目标。
+
+        临时名保留目标真实扩展名（如 xxx.png -> xxx.tmp.png），
+        否则 Pillow 等按扩展名推断格式的保存方写临时文件时
+        会因 .part 后缀抛 unknown file extension。
+        """
         target = Path(path).absolute()
-        return target.with_name(target.name + ".part")
+        suffix = target.suffix or ".part"
+        return target.with_name(f"{target.stem}.tmp{suffix}")
+
+    def _ensure_not_source(self, path: str | Path) -> None:
+        """拒绝把导出目标指向源 TIFF 本身，防止导出覆盖原始数据。
+
+        先做 normcase 字符串比较（覆盖大小写、分隔符、相对/绝对路径差异），
+        再用 os.path.samefile 复核「路径写法不同但指向同一文件」的情形
+        （符号链接、硬链接、8.3 短名等）；任一命中即拒绝。
+        """
+        if self.stack_info is None:
+            return
+        source = Path(self.stack_info.path)
+        target = Path(path)
+        same = os.path.normcase(os.path.abspath(str(source))) == os.path.normcase(
+            os.path.abspath(str(target))
+        )
+        if not same:
+            try:
+                same = (
+                    source.exists()
+                    and target.exists()
+                    and os.path.samefile(source, target)
+                )
+            except OSError:
+                same = False
+        if same:
+            raise AtomicToolError(
+                f"导出路径与源图像相同：{target}\n为避免覆盖原始数据，请另选文件名。"
+            )
 
     def save_current_marked_image(self) -> None:
         if self.stack is None:
@@ -2488,6 +2536,7 @@ class AtomicRecognitionApp:
         try:
             from PIL import Image
 
+            self._ensure_not_source(path)
             self._check_writable_target(path)
             rendered = render_marked_frame(
                 self._frame_array(),
@@ -2530,6 +2579,7 @@ class AtomicRecognitionApp:
         try:
             # 按未压缩大小保守预估，压缩实际占用更小；不足时宁可拒绝也不写一半。
             frame_height, frame_width = self.stack.shape[1:]
+            self._ensure_not_source(path)
             estimated_bytes = (
                 int(self.stack.shape[0]) * int(frame_height) * int(frame_width) * 3
             )
@@ -2965,6 +3015,12 @@ class AtomicRecognitionApp:
             self.frame_detection_params[index] = frame["detection_params"]
             self.frame_intensity_params[index] = frame["intensity_params"]
         self._sync_parameter_vars()
+        # 显示控件一并回填：否则打开会话后 Scale/复选框仍停留在旧位置，
+        # 而 _update_marker_radius/_toggle_ids 又从绑定变量读值，控件与状态脱钩。
+        # 实测对绑定变量 .set() 不会同步触发 Scale 的 -command，标签需一并同步。
+        self.marker_radius_var.set(float(self.marker_radius))
+        self.marker_radius_label.configure(text=f"{self.marker_radius:.1f} px")
+        self.show_ids_var.set(bool(self.show_ids))
         self._update_detection_summary()
         self._refresh_rule_tree()
         self.show_frame(reset_view=True)

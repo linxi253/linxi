@@ -14,6 +14,15 @@ from .presets import config_from_saved, load_preset, parse_distance_bins_text
 from .references import discover_cu_references
 from .reporting import export_artifacts
 
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 # CLI 参数的 argparse dest → AnalysisConfig 字段。
 _VALUE_FIELDS: dict[str, str] = {
     "fit_min_ev": "fit_min_ev",
@@ -22,6 +31,7 @@ _VALUE_FIELDS: dict[str, str] = {
     "background_max_ev": "background_max_ev",
     "smoothing_ev": "smoothing_ev",
     "regularization": "deconvolution_regularization",
+    "along_surface_segment_nm": "along_surface_segment_nm",
 }
 
 # 从 --config 复跑时排除的字段（由输入/输出/参考谱参数单独解析）。
@@ -67,6 +77,11 @@ def _parser() -> argparse.ArgumentParser:
         type=str,
         help='距离分层，如 "E1:0:2.2,E2:2.2:4.4,Bulk:11"（末层省略上限即开区间）',
     )
+    parser.add_argument(
+        "--along-surface-segment-nm",
+        type=float,
+        help="沿表面分段宽度 (nm)；Cu L2,3 内置预设为 11.0，--no-preset 时必须显式提供",
+    )
     parser.add_argument("--orientation", choices=("auto", "top", "bottom", "left", "right"), default=None)
     parser.add_argument("--survey-dataset", type=int)
     parser.add_argument("--low-loss-dataset", type=int)
@@ -110,7 +125,16 @@ def _config_overrides(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> dict:
-    """合并 preset/--config 与显式 CLI 参数；显式参数优先级最高。
+    """合并 preset/--config 与显式 CLI 参数，返回**单个** config 字段字典。
+
+    优先级：显式 CLI > --config/--preset > 程序默认。
+
+    回归 2026-10-03 R9：此前 ``_run`` 把 ``survey_dataset``/``low_loss_dataset``/
+    ``high_loss_dataset``/``surface_orientation`` 等字段**显式**传给
+    ``AnalysisConfig(...)``，同时 ``_config_overrides`` 又从 ``--config`` 读出的
+    保存配置里原样带回同名字段，于是 ``AnalysisConfig() got multiple values for
+    keyword argument 'survey_dataset'``——``--config`` 复跑在进入 ``run_analysis``
+    之前就必然失败。这里改为单一字典合并，调用方不再重复传这些键。
 
     运行控制类参数（bootstrap、敏感性、注入恢复）只在用户显式给出或基础
     配置未提供时才落到默认值，因此 --config 复跑与预设中写入的值不会被
@@ -156,6 +180,41 @@ def _config_overrides(
     return overrides
 
 
+def _build_config(parser: argparse.ArgumentParser, args: argparse.Namespace,
+                  saved: AnalysisConfig | None) -> AnalysisConfig:
+    """把 CLI/保存配置/预设合成**一个** AnalysisConfig（R9）。
+
+    所有字段（含输入输出、参考谱、数据对象编号、方向）都只在最终这一次构造
+    里给出，因此不存在同一键被传两次的可能。显式 CLI 值优先于保存配置。
+    """
+
+    overrides = _config_overrides(parser, args)
+    source = args.input if args.input is not None else saved.input_path
+    default_output = source.with_name(f"{source.stem}_eels_edge_analysis")
+    output = args.output_dir or (saved.output_dir if saved is not None else default_output)
+
+    def _dataset_index(cli_value: int | None, saved_value: int | None) -> int | None:
+        return cli_value if cli_value is not None else saved_value
+
+    orientation = args.orientation
+    if orientation is None:
+        orientation = saved.surface_orientation if saved is not None else "auto"
+
+    overrides.update(
+        input_path=source,
+        output_dir=output,
+        references=_references(args, saved),
+        survey_dataset=_dataset_index(
+            args.survey_dataset, saved.survey_dataset if saved is not None else None),
+        low_loss_dataset=_dataset_index(
+            args.low_loss_dataset, saved.low_loss_dataset if saved is not None else None),
+        high_loss_dataset=_dataset_index(
+            args.high_loss_dataset, saved.high_loss_dataset if saved is not None else None),
+        surface_orientation=orientation,
+    )
+    return AnalysisConfig(**overrides)
+
+
 def _progress(message: str, fraction: float | None) -> None:
     prefix = f"[{100 * fraction:5.1f}%] " if fraction is not None else ""
     print(prefix + message, flush=True)
@@ -183,27 +242,8 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         saved = config_from_saved(args.config)
     if args.input is None and saved is None:
         parser.error("必须提供输入 DM3/DM4 文件，或使用 --config 指定复跑配置。")
-    source = args.input if args.input is not None else saved.input_path
-    default_output = source.with_name(f"{source.stem}_eels_edge_analysis")
-    output = args.output_dir or (saved.output_dir if saved is not None else default_output)
 
-    def _dataset_index(cli_value: int | None, saved_value: int | None) -> int | None:
-        return cli_value if cli_value is not None else saved_value
-
-    orientation = args.orientation
-    if orientation is None:
-        orientation = saved.surface_orientation if saved is not None else "auto"
-
-    config = AnalysisConfig(
-        input_path=source,
-        output_dir=output,
-        references=_references(args, saved),
-        survey_dataset=_dataset_index(args.survey_dataset, saved.survey_dataset if saved else None),
-        low_loss_dataset=_dataset_index(args.low_loss_dataset, saved.low_loss_dataset if saved else None),
-        high_loss_dataset=_dataset_index(args.high_loss_dataset, saved.high_loss_dataset if saved else None),
-        surface_orientation=orientation,
-        **_config_overrides(parser, args),
-    )
+    config = _build_config(parser, args, saved)
     artifacts = run_analysis(config, progress=_progress)
     paths = export_artifacts(artifacts, config, compress_arrays=not args.npz_plain, overwrite=args.overwrite)
     print(f"完成。报告：{paths['report']}")

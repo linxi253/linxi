@@ -4,15 +4,40 @@ analyze_correct_data.py - Analyze the correctly extracted Au data.
 import numpy as np
 import os
 import matplotlib
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-BASE = os.environ.get('STEM4D_DATA',
-                      r'D:\data\4dSTEM\20260707-Au')
-DATA_DIR = os.environ.get('STEM4D_ANALYSIS_DATA',
-                          os.path.join(BASE, 'analysis', 'data'))
-OUTPUT_DIR = os.environ.get('STEM4D_OUTPUT',
-                            os.path.join(BASE, 'analysis', 'results', 'v2'))
+BASE = os.environ.get('STEM4D_DATA', '').strip()
+
+
+def _resolve_dirs():
+    """数据目录必须由环境变量提供（缺省报错并打印用法）；输出目录可选。"""
+    data_dir = os.environ.get('STEM4D_ANALYSIS_DATA', '').strip() or \
+        (os.path.join(BASE, 'analysis', 'data') if BASE else '')
+    if not data_dir:
+        raise SystemExit(
+            '[analyze_correct_data] 未配置数据目录：请设置 STEM4D_ANALYSIS_DATA'
+            '（或数据根目录 STEM4D_DATA）后重跑，例如：\n'
+            '  PowerShell: $env:STEM4D_ANALYSIS_DATA = \'<提取数据目录>\'\n'
+            '  cmd:        set STEM4D_ANALYSIS_DATA=<提取数据目录>')
+    output_dir = os.environ.get('STEM4D_OUTPUT', '').strip() or \
+        (os.path.join(BASE, 'analysis', 'results', 'v2') if BASE else
+         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output'))
+    return data_dir, output_dir
+
+
+DATA_DIR = ''
+OUTPUT_DIR = ''
 
 def analyze_dataset(name, filepath):
     """Analyze a correctly extracted dataset."""
@@ -220,6 +245,8 @@ def analyze_dataset(name, filepath):
 
 
 def main():
+    global DATA_DIR, OUTPUT_DIR
+    DATA_DIR, OUTPUT_DIR = _resolve_dirs()
     datasets = {
         'Au_SI19': os.path.join(DATA_DIR, 'Au_SI19_correct.npy'),
         'Au_SI20': os.path.join(DATA_DIR, 'Au_SI20_correct.npy'),

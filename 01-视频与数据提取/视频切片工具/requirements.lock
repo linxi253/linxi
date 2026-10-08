@@ -2,6 +2,9 @@
 # 已在 v4.1 验证的运行依赖。修改前必须重新执行完整测试矩阵。
 numpy==2.2.6
 tifffile==2025.5.10
+# 补录：video_extractor/ffmpeg.py 以可选 import imageio_ffmpeg 作为 FFmpeg
+# 兜底解析源，此前清单/锁均未声明。0.6.0 已验证存在 py3 wheel 可装。
+imageio-ffmpeg==0.6.0
 
 # 开发与发布依赖
 pytest==8.3.5

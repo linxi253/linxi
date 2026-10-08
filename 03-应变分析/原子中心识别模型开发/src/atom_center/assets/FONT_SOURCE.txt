@@ -1,10 +1,15 @@
-Bundled font: NotoSansCJKsc-AtomAnnotator.otf (unmodified upstream font)
+Optional font asset: NotoSansCJKsc-AtomAnnotator.otf (unmodified upstream font)
 Upstream: NotoSansCJKsc-Regular.otf, Noto Sans CJK 2.004
 Source: https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
 Upstream SHA-256: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
-Bundled SHA-256: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
+Expected SHA-256 when provided: 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
 License: SIL Open Font License 1.1; see OFL.txt in this directory.
 
-The complete Simplified Chinese font is bundled so arbitrary Chinese task names,
-file paths, metadata, and future user-interface text remain readable on Windows
-installations that do not have an optional CJK font pack.
+Audit 56 correction: this repository does NOT ship the font file. The .otf is
+an optional local asset: to enable it, download the upstream file above, verify
+its SHA-256, and place it next to this file under the name
+NotoSansCJKsc-AtomAnnotator.otf. Without the asset the annotator falls back to
+system fonts (Tk defaults plus the platform CJK fallbacks already configured in
+the GUI), so Chinese task names, file paths, and metadata remain readable on
+standard Windows installations; the bundled font only guarantees consistent
+rendering on systems lacking an optional CJK font pack.

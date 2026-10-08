@@ -12,9 +12,14 @@ Format overview:
 - Tag entry: type(1B: 0x14=group, 0x15=data) + label_len(2B) + label
 - Tag data: "%%%%" delimiter + info_array_length(4B) + info_array + data
 
-Data type codes:
-    2=int16, 3=int32, 4=uint16, 5=uint32, 6=float32, 7=float64,
-    8=bool, 9=char, 10=octet, 11=uint64, 12=uint64
+Data type codes (two distinct code spaces, do not mix them up):
+    Tag-tree encoded types (info arrays of binary tags, incl. the header
+    of the image "Data" blob; see DM_TAG_ENCODED_TYPE_MAP):
+        2=int16, 3=int32, 4=uint16, 5=uint32, 6=float32, 7=float64,
+        8=bool, 9=char, 10=octet, 11=uint64, 12=uint64
+    Image dataType codes (value of the ImageData/DataType tag; see
+    DM_TYPE_MAP): 1=int16, 2=float32, 3=complex64, 6=uint8, 7=int32,
+    9=int8, 10=uint16, 11=uint32, 12=float64, 13=complex128
 
 Reference:
     Based on the DM3/DM4 format specification documented by the
@@ -28,8 +33,8 @@ import numpy as np
 from typing import Tuple, Dict, Any, Optional, BinaryIO, List
 
 __all__ = [
-    'DM3Error', 'DM_TYPE_MAP', 'is_dm_file', 'read_dm_file',
-    'read_dm_file_simple', 'read_tiff',
+    'DM3Error', 'DM_TYPE_MAP', 'DM_TAG_ENCODED_TYPE_MAP', 'is_dm_file',
+    'read_dm_file', 'read_dm_file_simple', 'read_tiff',
 ]
 
 
@@ -38,8 +43,33 @@ class DM3Error(Exception):
     pass
 
 
-# Numpy dtype mapping for DM type codes
+# DM 图像 dataType 码表：ImageList/.../ImageData/DataType 标量值的语义。
+# Source: ncempy.io.dm._DM2NPDataTypes / Gatan dm4io.h GatanDataType 枚举。
+# 注意：这不是 tag 树的编码类型表（见下方 DM_TAG_ENCODED_TYPE_MAP）。
+# 把两者混用——用编码类型表解释图像 dataType（float32 码 2 当 int16、
+# uint16 码 10 当 uint8）——会静默解码出错误数值；反之用本表解释 tag
+# info 数组的类型码也会按错误的 itemsize 读取。
 DM_TYPE_MAP = {
+    1: np.dtype('int16'),
+    2: np.dtype('float32'),
+    3: np.dtype('complex64'),
+    6: np.dtype('uint8'),
+    7: np.dtype('int32'),
+    9: np.dtype('int8'),
+    10: np.dtype('uint16'),
+    11: np.dtype('uint32'),
+    12: np.dtype('float64'),
+    13: np.dtype('complex128'),
+}
+
+# DM tag 树「编码类型表」：二进制 tag info 数组中简单类型/数组元素类型的
+# 语义（SHORT=2, LONG=3, USHORT=4, ULONG=5, FLOAT=6, DOUBLE=7, BOOLEAN=8,
+# CHAR=9, OCTET=10, UINT64=12）。Source: ncempy.io.dm 的 _EncodedTypeDTypes
+# 与 _encodedTypeSizes——ncempy 正是用它计算并跳过包括图像 Data 块在内的
+# 所有二进制 tag 数组。本文件的 tag 解析（_read_simple_type / _read_array /
+# _read_complex_array / read_dm_file_simple 的原始扫描）只应使用这张表；
+# 图像 dataType 码一律用上方 DM_TYPE_MAP。
+DM_TAG_ENCODED_TYPE_MAP = {
     2: np.dtype('int16'),
     3: np.dtype('int32'),
     4: np.dtype('uint16'),
@@ -210,11 +240,27 @@ class _DMReader:
                 best = max(images_2d, key=lambda x: x[0].size)
             else:
                 best = max(self._all_images, key=lambda x: x[0].size)
-            self._image_data = best[0]
+            image = best[0]
+            # Unify with the ncempy reference path (_convert_ncempy_result):
+            # a declared multi-frame stack is cut to its first frame, so
+            # read_dm_file returns the same 2D image whether or not ncempy
+            # is installed.
+            while image.ndim > 2:
+                image = image[0]
+            self._image_data = np.ascontiguousarray(image)
             self._metadata['shape'] = self._image_data.shape
 
         if self._image_data is None:
             raise DM3Error("No image data found in DM file.")
+        if self._image_data.ndim != 2:
+            # Mirror the ncempy path (_convert_ncempy_result), which rejects
+            # sub-2D datasets instead of returning a flattened array the
+            # analysis pipeline cannot use (audit ticket 71: the two paths
+            # must agree for the same file).
+            raise DM3Error(
+                "DM dataset is not a 2D image "
+                f"(shape={self._image_data.shape}, no usable dimension tags)."
+            )
 
         # Extract pixel size from calibrations
         if self._calibrations:
@@ -420,9 +466,9 @@ class _DMReader:
 
     def _read_simple_type(self, type_code: int) -> Any:
         """Read a single value of the given type code."""
-        if type_code not in DM_TYPE_MAP:
+        if type_code not in DM_TAG_ENCODED_TYPE_MAP:
             return None
-        dtype = DM_TYPE_MAP[type_code]
+        dtype = DM_TAG_ENCODED_TYPE_MAP[type_code]
         raw = self._read_bytes(dtype.itemsize)
         if len(raw) < dtype.itemsize:
             return None
@@ -431,12 +477,12 @@ class _DMReader:
 
     def _read_array(self, elem_type_code: int, length: int) -> Optional[np.ndarray]:
         """Read an array of simple type."""
-        if elem_type_code not in DM_TYPE_MAP:
+        if elem_type_code not in DM_TAG_ENCODED_TYPE_MAP:
             return None
         if length <= 0 or length > 250_000_000:
             return None
 
-        dtype = DM_TYPE_MAP[elem_type_code]
+        dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type_code]
         data_size = length * dtype.itemsize
         remaining = self._remaining_bytes()
         if data_size > remaining:
@@ -471,8 +517,8 @@ class _DMReader:
             # Calculate element size
             elem_size = 0
             for ft in field_types:
-                if ft in DM_TYPE_MAP:
-                    elem_size += DM_TYPE_MAP[ft].itemsize
+                if ft in DM_TAG_ENCODED_TYPE_MAP:
+                    elem_size += DM_TAG_ENCODED_TYPE_MAP[ft].itemsize
                 else:
                     return None  # Unknown field type
 
@@ -488,7 +534,7 @@ class _DMReader:
             # Build structured dtype
             dt_list = []
             for i, ft in enumerate(field_types):
-                dt_list.append((f'f{i}', DM_TYPE_MAP[ft].newbyteorder(self.byte_order)))
+                dt_list.append((f'f{i}', DM_TAG_ENCODED_TYPE_MAP[ft].newbyteorder(self.byte_order)))
             struct_dtype = np.dtype(dt_list)
 
             arr = np.frombuffer(raw, dtype=struct_dtype, count=arr_len)
@@ -534,6 +580,12 @@ class _DMReader:
                 # Store as potential image data
                 if data.size > 100:  # Ignore small arrays (metadata)
                     shape = self._shape_from_known_dimensions(data.size)
+                    if shape is None:
+                        # A declared multi-frame stack cannot be matched with
+                        # a dimension pair; use the full declared shape so
+                        # read() can cut the first frame like the ncempy
+                        # reference path does.
+                        shape = self._shape_from_declared_dimensions(data.size)
                     if shape is not None:
                         image = data.reshape(shape)
                         self._all_images.append((image, list(shape)))
@@ -614,19 +666,81 @@ class _DMReader:
                 return height, width
         return None
 
+    def _shape_from_declared_dimensions(
+            self, total: int) -> Optional[Tuple[int, ...]]:
+        """Return the full (>=3 dim) declared shape, DM order reversed.
+
+        ``_shape_from_known_dimensions`` only matches dimension pairs, so a
+        declared 3D stack used to fall through to the flat 1D payload and
+        read() returned a different shape than the ncempy path (audit
+        ticket 71).  Matching the full declared shape lets read() reshape
+        the stack and slice its first frame.
+        """
+        dims = [int(v) for v in self._image_dimensions if int(v) > 0]
+        for length in range(len(dims), 2, -1):
+            window = dims[len(dims) - length:]
+            if int(np.prod(window)) == total:
+                return tuple(reversed(window))
+        return None
+
+
+def _read_preceding_label(data, found: int, version: int) -> Optional[str]:
+    """Recover the tag label preceding a ``%%%%`` delimiter, if trusted.
+
+    Every tag entry places its label immediately before the tag-data
+    delimiter: ``[0x15][label_len:u16][label][DM4: total size:u64] %%%%``.
+    A delimiter not preceded by such a well-formed structure is almost
+    certainly a ``0x25252525`` byte sequence inside binary payload data (a
+    phantom delimiter) and must not be interpreted as a tag.  Returns the
+    printable-ASCII label (``''`` for legal unnamed tags) or ``None`` when
+    the position is untrusted.
+    """
+    label_end = found - 8 if version == 4 else found
+    if label_end - 3 < 0:
+        return None
+    # 标签长度字段在标签之前（[0x15][len:2][label]），位置依赖未知的
+    # label_len，只能枚举：len 字段值 == L 且前置类型字节 0x15 同时成立。
+    for label_len in range(0, 65):
+        len_pos = label_end - label_len - 2
+        if len_pos < 1:
+            break
+        if struct.unpack('>H', data[len_pos:len_pos + 2])[0] != label_len:
+            continue
+        if data[len_pos - 1] != 0x15:
+            continue
+        raw = data[len_pos + 2:label_end]
+        if len(raw) != label_len:
+            continue
+        if any(b < 0x20 or b > 0x7E for b in raw):
+            continue
+        return raw.decode('ascii')
+    return None
+
 
 def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    Simplified DM3/DM4 reader that uses a heuristic approach to find the
-    largest 2D data array, which is typically the main image.
+    Fallback DM3/DM4 reader that walks the raw ``%%%%`` tag-data delimiters.
 
-    This is more robust than the structural parser for files with
-    non-standard or corrupted tag structures.
+    Only used when both ncempy and the structural parser reject a file (e.g.
+    non-standard or corrupted tag structures).  The scan validates the
+    tag-entry structure preceding every delimiter (type byte 0x15 plus a
+    length-prefixed printable label) so phantom ``0x25252525`` sequences
+    inside binary payload data are ignored instead of hijacking the stream.
 
-    Parameters
-    ----------
-    filepath : str
-        Path to DM file.
+    The main image block is selected from the file's own metadata, never by
+    picking the largest array:
+
+    - a block is a candidate only for a ``Data``-labelled array whose
+      declared ``Dimensions`` metadata holds exactly two positive values
+      whose product equals the array length; the returned shape comes from
+      that declaration (row-major ``(height, width)``), never from
+      factorising the element count, so 3D stacks cannot be reshaped into an
+      invented 2D shape;
+    - when several candidates survive, a ``DataType`` code from
+      ``DM_TYPE_MAP`` (real numeric image) disambiguates against
+      palette/compressed thumbnail types;
+    - if the main image is still not uniquely identified, ``DM3Error`` is
+      raised instead of silently guessing.
 
     Returns
     -------
@@ -649,16 +763,25 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
             endian = '<' if bo == 1 else '>'
             encoded_fmt, encoded_size = ('I', 4) if version == 3 else ('Q', 8)
 
-            # Store only descriptors while scanning. Candidate image arrays are
-            # copied only after the largest valid block is selected.
-            candidates = []
+            # Descriptors only while scanning; the selected block is copied
+            # after the metadata-based selection has uniquely identified it.
+            image_blocks: List[Dict[str, Any]] = []
+            pending_dims: List[int] = []
+            pending_dtype_code: Optional[int] = None
             delimiter = b'%%%%'
             idx = 0
             while idx < file_size - (4 + encoded_size * 2):
                 found = data.find(delimiter, idx)
                 if found < 0:
                     break
+                label = _read_preceding_label(data, found, version)
                 idx = found + 4
+
+                if label is None:
+                    # Phantom delimiter inside binary payload data: never
+                    # interpret the bytes that follow as an info array.
+                    idx = found + 1
+                    continue
 
                 if idx + encoded_size > file_size:
                     break
@@ -679,35 +802,113 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
                     for j in range(n_vals)
                 ]
                 idx += info_bytes
+                lowered = label.strip().lower()
 
-                if len(info_array) == 3 and info_array[0] == 20:
-                    elem_type, arr_len = info_array[1], info_array[2]
-                    if elem_type not in DM_TYPE_MAP or arr_len <= 100:
-                        continue
-                    dtype = DM_TYPE_MAP[elem_type].newbyteorder(endian)
-                    total_bytes = int(arr_len) * dtype.itemsize
-                    if total_bytes <= 0 or idx + total_bytes > file_size:
-                        continue
-                    shape_2d = _find_2d_shape(int(arr_len))
-                    if shape_2d is not None:
-                        candidates.append(
-                            (int(arr_len), idx, dtype, shape_2d)
+                if n_vals == 1 and info_array[0] in DM_TAG_ENCODED_TYPE_MAP:
+                    # Scalar tag: Dimensions/DataType carry the metadata used
+                    # to identify and shape the main image block.
+                    scalar_dtype = DM_TAG_ENCODED_TYPE_MAP[info_array[0]]
+                    if idx + scalar_dtype.itemsize <= file_size:
+                        value = int(np.frombuffer(
+                            data,
+                            dtype=scalar_dtype.newbyteorder(endian),
+                            count=1,
+                            offset=idx,
+                        )[0])
+                        idx += scalar_dtype.itemsize
+                        if lowered == 'dimensions' and value > 0 \
+                                and len(pending_dims) < 8:
+                            pending_dims.append(value)
+                        elif lowered == 'datatype':
+                            pending_dtype_code = value
+                elif (n_vals == 3 and info_array[0] == 20
+                        and info_array[1] in DM_TAG_ENCODED_TYPE_MAP):
+                    elem_type, arr_len = info_array[1], int(info_array[2])
+                    dtype = DM_TAG_ENCODED_TYPE_MAP[elem_type]
+                    total_bytes = arr_len * dtype.itemsize
+                    fits = arr_len > 0 and idx + total_bytes <= file_size
+                    if lowered == 'data':
+                        if arr_len > 100 and fits:
+                            image_blocks.append({
+                                'arr_len': arr_len,
+                                'offset': idx,
+                                'dtype': dtype.newbyteorder(endian),
+                                'dims': tuple(pending_dims),
+                                'dtype_code': pending_dtype_code,
+                            })
+                        if fits:
+                            idx += total_bytes
+                        pending_dims = []
+                        pending_dtype_code = None
+                    elif lowered == 'dimensions' and 1 <= arr_len <= 8 and fits:
+                        # Array-form Dimensions: {20, elem_type, n_values}.
+                        values = np.frombuffer(
+                            data,
+                            dtype=dtype.newbyteorder(endian),
+                            count=arr_len,
+                            offset=idx,
                         )
-                    idx += total_bytes
-                elif len(info_array) == 1 and info_array[0] in DM_TYPE_MAP:
-                    idx += DM_TYPE_MAP[info_array[0]].itemsize
+                        idx += total_bytes
+                        for value in values:
+                            value = int(value)
+                            if value > 0 and len(pending_dims) < 8:
+                                pending_dims.append(value)
+                    elif fits:
+                        # Any other labelled array: skip its declared payload
+                        # so the scan resumes after it instead of inside it.
+                        idx += total_bytes
 
-            if not candidates:
+            if not image_blocks:
                 raise DM3Error("No plausible 2D image data found in DM file.")
 
-            _, data_offset, dtype, shape = max(candidates, key=lambda item: item[0])
-            count = shape[0] * shape[1]
+            # Verify each candidate against the declared dimension metadata.
+            verified = []
+            for block in image_blocks:
+                dims = block['dims']
+                if len(dims) == 2 and dims[0] > 0 and dims[1] > 0 \
+                        and dims[0] * dims[1] == block['arr_len']:
+                    block['shape'] = (dims[1], dims[0])  # (height, width)
+                    verified.append(block)
+
+            if not verified:
+                for block in image_blocks:
+                    dims = block['dims']
+                    if len(dims) > 2 and 0 not in dims \
+                            and int(np.prod(dims)) == block['arr_len']:
+                        raise DM3Error(
+                            "DM file declares a "
+                            f"{len(dims)}-dimensional dataset (dimensions="
+                            f"{list(dims)}), not a 2D image; the heuristic "
+                            "fallback reader cannot reshape it without "
+                            "inventing a shape."
+                        )
+                raise DM3Error("No plausible 2D image data found in DM file.")
+
+            # DataType metadata disambiguation: a real numeric image type
+            # wins over palette/compressed thumbnail types (e.g. 23).
+            if len(verified) > 1:
+                numeric = [
+                    block for block in verified
+                    if block['dtype_code'] in DM_TYPE_MAP
+                ]
+                if len(numeric) == 1:
+                    verified = numeric
+            if len(verified) > 1:
+                raise DM3Error(
+                    f"Found {len(verified)} plausible image data blocks "
+                    f"(dims/dtype: "
+                    f"{[(block['dims'], block['dtype_code']) for block in verified]}"
+                    "); cannot identify the main image without guessing."
+                )
+
+            block = verified[0]
+            count = block['arr_len']
             largest = np.frombuffer(
                 data,
-                dtype=dtype,
+                dtype=block['dtype'],
                 count=count,
-                offset=data_offset,
-            ).astype(np.float64, copy=True).reshape(shape)
+                offset=block['offset'],
+            ).astype(np.float64, copy=True).reshape(block['shape'])
             metadata = {
                 'shape': largest.shape,
                 'reader': 'heuristic',
@@ -719,36 +920,6 @@ def read_dm_file_simple(filepath: str) -> Tuple[np.ndarray, Dict[str, Any]]:
             _extract_pixel_size_heuristic(data, endian, metadata)
 
     return largest, metadata
-
-
-def _find_2d_shape(total: int) -> Optional[Tuple[int, int]]:
-    """
-    Try to find a reasonable 2D shape for the given total element count.
-    Prefers square-ish images with common TEM sizes.
-    """
-    # Common TEM image sizes
-    common_sizes = [
-        (4096, 4096), (2048, 2048), (1024, 1024), (512, 512), (256, 256),
-        (4096, 2048), (2048, 4096), (2048, 1024), (1024, 2048),
-        (4000, 4000), (3000, 3000), (2000, 2000),
-        (1024, 768), (768, 1024), (640, 480), (480, 640),
-        (576, 576), (584, 584), (288, 288),
-    ]
-
-    for h, w in common_sizes:
-        if h * w == total:
-            return (h, w)
-
-    # Try to factorize: find factors closest to sqrt
-    sqrt_n = int(np.sqrt(total))
-    for i in range(sqrt_n, max(1, sqrt_n - 100), -1):
-        if total % i == 0:
-            j = total // i
-            # Accept if aspect ratio is reasonable (< 4:1)
-            if 0.25 < i / j < 4.0:
-                return (i, j)
-
-    return None
 
 
 def _find_dm_unit_hint(data: bytes, start: int, end: int) -> Optional[str]:

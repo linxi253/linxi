@@ -47,6 +47,8 @@ try {
         throw "ZIP 便携版清洁环境自检失败：$($portableProcess.ExitCode)"
     }
     $portableResult = Get-Content -LiteralPath $portableReport -Raw | ConvertFrom-Json
+    # 审计 56：.otf 是可选资产，仓库默认不收录。只有当构建确实带上了字体
+    # （bundled_font_asset_present 为真）时才要求注册成功。
     if (
         -not $portableResult.ok `
         -or -not $portableResult.frozen `
@@ -58,7 +60,7 @@ try {
         -or -not $portableResult.sidebar_horizontal_fits `
         -or -not $portableResult.sidebar_vertical_overflow `
         -or -not $portableResult.image_switch_passed `
-        -or -not $portableResult.bundled_font_registered
+        -or ($portableResult.bundled_font_asset_present -and -not $portableResult.bundled_font_registered)
     ) {
         throw "ZIP 便携版自检断言失败：$portableReport"
     }
@@ -73,6 +75,7 @@ try {
         throw "单文件版清洁环境自检失败：$($singleProcess.ExitCode)"
     }
     $singleResult = Get-Content -LiteralPath $singleReport -Raw | ConvertFrom-Json
+    # 审计 56：同上，资产存在才校验字体注册。
     if (
         -not $singleResult.ok `
         -or -not $singleResult.frozen `
@@ -84,7 +87,7 @@ try {
         -or -not $singleResult.sidebar_horizontal_fits `
         -or -not $singleResult.sidebar_vertical_overflow `
         -or -not $singleResult.image_switch_passed `
-        -or -not $singleResult.bundled_font_registered
+        -or ($singleResult.bundled_font_asset_present -and -not $singleResult.bundled_font_registered)
     ) {
         throw "单文件版自检断言失败：$singleReport"
     }

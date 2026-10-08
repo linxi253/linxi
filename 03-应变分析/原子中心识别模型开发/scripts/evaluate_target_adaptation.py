@@ -14,6 +14,15 @@ from atom_center.model_manifest import sha256_file
 from atom_center.image_io import load_image
 from atom_center.source_identity import verify_source
 from atom_center.evaluation import evaluate_dataset
+
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from evaluate_reviewed_test_answers import score, inside, draw_overlay
 

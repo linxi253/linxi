@@ -69,7 +69,20 @@ v4.1 改为两个小程序共用七个 FFmpeg DLL，并移除了只为 PNG/JPEG 
 
 ## 从源码运行
 
-要求 Python 3.11–3.13。仓库已经准备好经校验的 FFmpeg 8.1 共享运行时时：
+要求 Python 3.11–3.13。FFmpeg 8.1 共享运行时**不随仓库分发**：运行时二进制
+（`ffmpeg.exe`、`ffprobe.exe` 与七个 DLL）因体积被 `.gitignore` 排除、不入库，
+仓库只提供经校验的下载来源与逐文件 SHA-256（见
+[`tools/ffmpeg/PROVENANCE.md`](tools/ffmpeg/PROVENANCE.md)）。首次使用请先下载
+归档、解压出上述九个文件放入 `tools/ffmpeg/`，放置与核验步骤详见
+[`tools/ffmpeg/README.md`](tools/ffmpeg/README.md)：
+
+```powershell
+# 下载归档；SHA-256 必须与 tools/ffmpeg/PROVENANCE.md 记录一致，不一致即停止使用
+Invoke-WebRequest `
+  -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip" `
+  -OutFile "ffmpeg-runtime.zip"
+# 解压后把 ffmpeg.exe、ffprobe.exe 与七个 DLL 放入 tools/ffmpeg/，并逐文件核对 SHA-256
+```
 
 ```powershell
 python -m pip install -r requirements.lock
@@ -136,7 +149,7 @@ FFmpeg 运行时 SHA-256（不匹配即拒绝构建）、运行完整测试，�
 - 解码停滞超过 120 秒（无任何帧输出）自动终止并报错，损坏输入不会把
   任务永久挂起。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

@@ -1,11 +1,18 @@
 # EELS边缘价态分析工具 v1
 
+## 开发入口
+
+[修改约定](AGENTS.md) · [源码地图、环境与测试](DEVELOPMENT.md)。开发命令使用项目内解释器；下文历史功能版本与源码包版本分别说明。
+
 用于 DM3/DM4 配对 Dual-EELS Spectrum Image 的样品物理边缘分析。v1 提供 Cu L2,3
 的 Cu0/Cu1/Cu2 非负 MLLS、复散射校正、移动块 bootstrap、模型选择、参数敏感性和
 Cu1 注入恢复检验。
 
 该工具首先作为独立 Tkinter 程序开发，同时提供命令行入口；随后可由
 AIforTEM 的 TEM Suite 以标签页方式内嵌。
+
+> 版本说明：标题与正文中的 v1/v1.1/v1.2 是开发阶段称谓；当前版本号一律以
+> `pyproject.toml` 为准（0.2.0，见文末速查表）。
 
 ## 适用输入
 
@@ -178,7 +185,7 @@ Windows 发行版：
 - 性能：敏感性分析仅对 E1 及边界邻域像素执行去卷积（大型 SI 下每次去卷积
   约 16 倍加速），原始文件哈希校验由 4 次全量读取降为 2 次（stat 快路径）。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 
@@ -190,7 +197,7 @@ Windows 发行版：
 | 版本来源 | `pyproject.toml` |
 | 入口 | `run.py` |
 | 依赖锁定 | `requirements.lock.txt` |
-| 许可证 | MIT |
+| 许可证 | MIT（本体代码）；**发行 exe 内含 GPL-3.0 的 ncempy**，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
 **从源码运行**——必须使用本工具自己的虚拟环境，不要用 PATH 上的 `python`：
 各工具依赖版本互不相同，共用解释器会互相污染。

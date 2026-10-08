@@ -6,7 +6,7 @@
 - 视频切片工具：`<仓库根>\01-视频与数据提取\视频切片工具\video_extractor`
 - 漂移矫正 v7：`<仓库根>\02-图像处理\drift-correction-v7\drift_core.py`
 
-环境要求：Python 3.10-3.12（本机 Miniconda base：Python 3.10.9）+ numpy / opencv / tifffile / matplotlib，均已满足；ffmpeg 由切片工具自带（`tools\ffmpeg`），无需额外安装。
+环境要求：与仓库其它工具一致，使用**项目内独立 venv**（不要在 Miniconda base 或 PATH 上的 python 直接运行）。Python 3.11-3.12（video_extractor 要求 `>=3.11`、drift_core 要求 `<3.13`）；依赖从 `requirements.lock.txt` 安装。仓库/工作区根的 `.tools/provision-envs.py --with-tests` 会按清单读取锁、处理测试依赖，**不会生成或改写锁**；操作命令见[环境隔离说明](../环境隔离说明.md)。FFmpeg 使用视频切片工具 `tools/ffmpeg` 下按 `PROVENANCE.md` 核验的本地资产。
 
 ## 用法一：DSH 工具（推荐）
 
@@ -42,8 +42,8 @@ stdout 每行一个 JSON：`progress` / `info` / `summary` / `error`（末行为
 
 ```
 <output-root>/<视频名>/            （目录已存在且有产物时自动追加 _yyyyMMdd-HHmmss）
-  01_raw_<视频名>_stack.ome.tif      原始提取堆栈（OME-TIFF，TYX）
-  01_raw_<视频名>_frames.csv         逐帧清单（含时间轴）
+  01_raw_<视频名>_stack.tif          原始提取堆栈（ImageJ 兼容普通 TIFF，TYX）
+  01_raw_<视频名>_frames.csv         逐帧清单（含时间轴，output_file 指向最终 TIFF）
   02_corrected_<视频名>.tif          漂移矫正结果 TIFF
   02_drift_shifts.csv                每帧位移 dx/dy/模长
   02_drift_curve.png                 漂移曲线图（人工复核用）
@@ -56,7 +56,9 @@ stdout 每行一个 JSON：`progress` / `info` / `summary` / `error`（末行为
 
 | 参数 | 作用 | 默认 |
 |---|---|---|
-| `sampling` / `sampling_value` | 采样方式：all / target_fps / interval | target_fps / 5 |
+| `sampling` / `sampling_value` | 采样方式：all / target_fps / interval。`all` 会提取全部帧并忽略 `sampling_value` | target_fps / 5 |
+| `compression` | **只作用于本流水线自己的矫正产物** `02_corrected_*.tif`：`none`（未压缩）/ `deflate`（zlib 无损，体积约 1/6）。提取堆栈 `01_raw_*` 由上游视频工具写出，固定未压缩 ImageJ TIFF，不受本参数影响 | none |
+| `bit_depth` | 提取位深：source / 8 / 16 | source |
 | `crop_rect` | 区域裁剪 `x0,y0,x1,y1`（0~1 分数） | 无（界面录制视频通常需要 `0,0,0.3333,1`） |
 | `skip_interval` | 漂移检测跳帧间隔 | 1 |
 | `crop_mode` | 矫正输出：crop（共同有效区）/ keep | crop |

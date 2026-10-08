@@ -5,11 +5,32 @@ import numpy as np
 import os
 from ncempy.io import dm
 
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def _require_env(name: str, hint: str) -> str:
+    """缺环境变量即报错并打印用法；脚本不内置任何本机默认路径。"""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise SystemExit(
+            f'[check_cu_standard] 缺少环境变量 {name}（{hint}）。\n'
+            f'用法：先设置环境变量再重跑，例如：\n'
+            f'  PowerShell: $env:{name} = \'<路径>\'\n'
+            f'  cmd:        set {name}=<路径>')
+    return value
+
+
 def main():
     # Cu foil standard data
-    STANDARD_DIR = os.environ.get('STEM4D_STANDARD',
-                                  r'D:\data\4dSTEM\standard\data')
-    cu_path = os.path.join(STANDARD_DIR, 'Cu foil-grain boundary.dm4')
+    standard_dir = _require_env('STEM4D_STANDARD', '标准样品数据目录')
+    cu_path = os.path.join(standard_dir, 'Cu foil-grain boundary.dm4')
 
     print('='*70)
     print('Cu Foil Standard Data Quality Check')
@@ -35,14 +56,36 @@ def main():
             # Get offset and dtype
             offset = f.dataOffset[i]
             dtype_code = f.dataType[i]
-        
-            # DM4 data type mapping
+
+            # DM4 image dataType mapping (image data body semantics).
+            # Source: ncempy.io.dm._DM2NPDataTypes / Gatan dm4io.h
+            # GatanDataType enum. NOT the tag-level encoded-type table
+            # (_EncodedTypeDTypes): that one maps code 2 to int16 and
+            # code 10 to uint8, which silently corrupts image data.
             DM4_DTYPES = {
-                2: np.int16, 3: np.int32, 4: np.uint16, 5: np.uint32,
-                6: np.float32, 7: np.float64, 8: np.int8, 9: np.uint8,
-                10: np.uint8, 11: np.uint64, 12: np.uint64,
+                1: np.int16, 2: np.float32, 3: np.complex64,
+                6: np.uint8, 7: np.int32, 9: np.int8,
+                10: np.uint16, 11: np.uint32, 12: np.float64,
+                13: np.complex128,
             }
-            base_dtype = DM4_DTYPES.get(dtype_code, np.uint8)
+            if dtype_code not in DM4_DTYPES:
+                raise RuntimeError(
+                    f'Unsupported DM4 dataType code {dtype_code}; supported '
+                    f'codes: {sorted(DM4_DTYPES)}')
+            base_dtype = DM4_DTYPES[dtype_code]
+
+            # The tag tree declares the byte count of the data block; it
+            # must match element count x itemsize of the mapped dtype,
+            # otherwise decoding would silently produce garbage.
+            n_elements = (f.xSize[i] * f.ySize[i] * f.zSize[i] * f.zSize2[i])
+            data_sizes = getattr(f, 'dataSize', None)
+            if data_sizes is not None and i < len(data_sizes):
+                declared = int(data_sizes[i])
+                if declared != n_elements * np.dtype(base_dtype).itemsize:
+                    raise RuntimeError(
+                        f'dataType {dtype_code} -> {np.dtype(base_dtype)} '
+                        f'implies {n_elements * np.dtype(base_dtype).itemsize} '
+                        f'bytes but the tag tree declares {declared}')
         
             # Check byte order
             with open(cu_path, 'rb') as fp:
@@ -142,7 +185,10 @@ def main():
             print(f'  {"="*60}')
             print(f'  {"Metric":<30} {"Cu foil":<15} {"Au SI19":<15}')
             print(f'  {"-"*60}')
-            print(f'  {"Data type":<30} {"uint8":<15} {"int16":<15}')
+            print(f'  {"Data type":<30} {base_dtype.__name__:<15} {"float32":<15}')
+            print(f'  (dtype labels follow the image dataType table; the old')
+            print(f'   "Cu=uint8 / Au=int16" labels came from the wrong')
+            print(f'   encoded-type table: Au dataType=2 -> float32.)')
             print(f'  {"Negative pixels":<30} {"0%":<15} {"~50%":<15}')
             print(f'  {"Mean intensity":<30} {data.mean():<15.1f} {"~0 (raw)":<15}')
             print(f'  {"Center/Corner ratio":<30} {center_val/corner_val:<15.3f} {"~1.0":<15}')
@@ -158,10 +204,14 @@ def main():
     print('Checking previously extracted Cu data')
     print('='*70)
 
-    BASE = os.environ.get('STEM4D_DATA',
-                          r'D:\data\4dSTEM\20260707-Au')
-    extracted_path = os.path.join(BASE, 'analysis', 'data',
-                                  'Cu_foil_crop128.npy')
+    BASE = os.environ.get('STEM4D_DATA', '').strip()
+    data_dir = os.environ.get('STEM4D_ANALYSIS_DATA', '').strip() or \
+        (os.path.join(BASE, 'analysis', 'data') if BASE else '')
+    if not data_dir:
+        print('\nSkipped extracted-data check '
+              '(set STEM4D_ANALYSIS_DATA or STEM4D_DATA to enable)')
+        return
+    extracted_path = os.path.join(data_dir, 'Cu_foil_crop128.npy')
     if os.path.exists(extracted_path):
         cu_extracted = np.load(extracted_path)
         print(f'\nExtracted Cu data:')
@@ -171,10 +221,8 @@ def main():
         print(f'  Negative pixels: {np.sum(cu_extracted < 0)}')
     else:
         print(f'\nExtracted file not found: {extracted_path}')
-    
+
         # Check what files exist
-        data_dir = os.environ.get('STEM4D_ANALYSIS_DATA',
-                                  os.path.join(BASE, 'analysis', 'data'))
         print(f'\nFiles in {data_dir}:')
         for fname in os.listdir(data_dir):
             if fname.endswith('.npy'):

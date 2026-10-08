@@ -15,7 +15,7 @@ from core.orientation_mapping import (STRUCTURE_PRESETS, build_zone_axis_bank,
                                       index_diffraction_pattern,
                                       make_structure, reciprocal_matrix,
                                       reflection_allowed, zone_axis_template)
-from core.peak_pairs import peak_pairs_mapping
+from core.peak_pairs import _fold_angle_difference, peak_pairs_mapping
 from core.ptychography import initialize_probe, run_ptychography
 from core.strain_mapping import (detect_bragg_disks,
                                  fit_displacement_gradient,
@@ -124,6 +124,91 @@ def test_peak_pairs_cancellation():
 
     res = peak_pairs_mapping(cube, (16, 16), 10.0, should_stop=stop)
     assert res == {'cancelled': True}
+
+
+def test_peak_pair_angle_folding_undirected():
+    """工单21：角度差按「方向模 180 的无向峰对」折叠，|Δ|>180° 不得为负。
+
+    旧公式 min(d, 180-d) 在 d>180° 时给出负值（Δ=190°→-10°，
+    Δ=350°→-170°），令方向完全不匹配的峰对反而获得负惩罚。
+    """
+    assert abs(float(_fold_angle_difference(190.0)) - 10.0) < 1e-9
+    assert abs(float(_fold_angle_difference(350.0)) - 10.0) < 1e-9
+    for d, want in [(0.0, 0.0), (45.0, 45.0), (90.0, 90.0),
+                    (135.0, 45.0), (180.0, 0.0), (270.0, 90.0),
+                    (360.0, 0.0)]:
+        assert abs(float(_fold_angle_difference(d)) - want) < 1e-9
+    grid = _fold_angle_difference(np.arange(0.0, 360.01, 0.25))
+    assert float(grid.min()) >= 0.0
+    assert float(grid.max()) <= 90.0 + 1e-9
+
+
+def _gauss_disk_factory(det, sigma=1.5):
+    """高斯盘：严格单极大（软边盘的线性剖面在中心削顶成平台，
+    find_peaks_in_dp 的 `dp == local_max` 会把平台逐像素都判成峰）。"""
+    yy, xx = np.mgrid[0:det, 0:det]
+
+    def make(y, x, inten=100.0):
+        d2 = (yy - y) ** 2 + (xx - x) ** 2
+        return inten * np.exp(-d2 / (2.0 * sigma ** 2))
+
+    return make
+
+
+def _dp_from_disks(det, disk, peaks):
+    dp = np.zeros((det, det))
+    for y, x, inten in peaks:
+        dp += disk(y, x, inten)
+    return dp
+
+
+def test_peak_pairs_190_degree_trap_not_preferred():
+    """工单21 管线级：Δ≈190° 的陷阱峰对不得凭负分抢走最佳匹配。
+
+    参考峰对方向 29.74°（间距 24.19 px）。位置 (0,0) 的局域 DP 含
+    真匹配对（34.99°，24.41 px，有向差 5.25°）与陷阱对（-160.83°，
+    24.35 px，有向差 190.57°≈190°）。旧公式对陷阱对记负惩罚
+    （score≈-0.89 < 真匹配 0.75）而选错；按模 180 折叠后陷阱对差
+    10.57°（score≈1.22），真匹配以 0.75 胜出。
+    """
+    det = 64
+    disk = _gauss_disk_factory(det)
+    ref_dp = _dp_from_disks(det, disk,
+                            [(32, 32, 50.0), (44, 53, 30.0)])
+    cube = np.repeat(ref_dp[None, None], 4, axis=0).repeat(4, axis=1)
+    cube[0, 0] = _dp_from_disks(
+        det, disk, [(32, 32, 100.0), (46, 52, 60.0), (24, 9, 40.0)])
+
+    res = peak_pairs_mapping(cube, (32, 32), 15.0)
+    assert res is not None and res['n_pairs'] == 1
+    # (0,0) 必须选中真匹配对（≈35.0°），而非 -160.8° 的陷阱对
+    assert abs(res['pair_angles'][0, 0, 0] - 34.99) < 3.0
+    # 其余位置正常匹配参考对（29.74°）
+    assert (np.abs(res['pair_angles'][1:, :, 0] - 29.74) < 1.0).all()
+
+
+def test_peak_pairs_350_degree_trap_rejected():
+    """工单21 管线级：Δ≈350° 的峰对按模 180 折叠后方向仅差 9.46°，
+    但间距失配 ~19.7 px 必须被 `score < 5` 判据拒绝。
+
+    旧公式对 Δ=350.54° 记负惩罚 -17.05，把 score 压到 ≈2.6 而将
+    间距差近 20 px 的峰对错误放行（负分恒满足 <5）。
+    """
+    det = 64
+    disk = _gauss_disk_factory(det)
+    ref_dp = _dp_from_disks(det, disk,
+                            [(32, 50, 50.0), (28, 26, 30.0)])  # -170.54°
+    cube = np.repeat(ref_dp[None, None], 4, axis=0).repeat(4, axis=1)
+    # 陷阱对：+180.0°（arctan2(0,-44)），间距 44 px → Δ=350.54°≈350°
+    cube[0, 0] = _dp_from_disks(det, disk,
+                                [(32, 50, 100.0), (32, 6, 60.0)])
+
+    res = peak_pairs_mapping(cube, (32, 50), 25.0)  # max_distance=50
+    assert res is not None and res['n_pairs'] == 1
+    assert res['pair_distances'][0, 0, 0] == 0.0
+    assert res['pair_angles'][0, 0, 0] == 0.0
+    # 其余 15 个位置与参考对完全一致，正常匹配
+    assert (res['pair_distances'][1:, :, 0] > 0).all()
 
 
 # ================= 取向 =================

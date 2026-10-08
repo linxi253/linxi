@@ -14,6 +14,16 @@ Reference: Pennycook et al., Ultramicroscopy 151, 160-167 (2015)
 import numpy as np
 from numpy.fft import fft2, ifft2, fftshift, ifftshift
 import matplotlib
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import os, time, json
@@ -161,8 +171,12 @@ def generate_4dstem_fast(scan_shape, det_shape, alpha_pixels, defocus_rad=0.0):
             # Exit wave
             exit_wave = probe_shifted * obj
             
-            # Diffraction pattern
-            exit_k = fft2(exit_wave)
+            # Diffraction pattern. fftshift moves the DC (unscattered beam
+            # centre) to the array centre so that the centre-based crop/pad
+            # below and the aperture geometry in ssb_reconstruct (which place
+            # the BF disk at `center`) refer to the same point; probe_k above
+            # already follows this convention.
+            exit_k = fftshift(fft2(exit_wave))
             
             # Crop to detector size from center
             # If det > scan, pad; if det < scan, crop

@@ -97,8 +97,11 @@ v5 目前安全支持：
   脚本的旋转平均采样方式。
 
 两种模式的名称是刻意区分的；在获得更多 DM golden images 前，不能把二者都
-宣称为“完全一致”。在一个 128×128 固定合成图上，v5 `fast_radial_bin` 与归档 v4
-Python 实现的 Wiener 输出 NRMSE 为约 `1.41e-5`。
+宣称为“完全一致”。开发机上曾在同一 128×128 固定合成图上把 v5 `fast_radial_bin`
+与归档 v4 Python 实现的 Wiener 输出做过一次对照，NRMSE 约 `1.41e-5`；该 v4
+归档与对照脚本均未随本仓库分发（见下文「历史版本与第三方文件」），此数值无法
+从仓库内容复现，仅作开发期记录。仓库内 `tests/test_regression.py` 的回归金标
+由当前实现自身生成，只用于防止算法漂移，不构成与 v4 一致性的证明。
 
 注意 Butterworth“阶数”沿用 DM 参考实现的约定，而非教科书定义：幅值在
 `zero_radius` 处为 `1/√2`（半功率），但渐近衰减为 `r^(-2n)`——即本工具的
@@ -135,14 +138,14 @@ pyinstaller .\HRTEM_Filter_CLI.spec
 
 ## 历史版本与第三方文件
 
-修复前的完整 42 文件快照位于：
-
-`<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`
+修复前的完整 42 文件快照归档在开发机的
+`<仓库根>\08-历史版本\hrtem-HRTEM滤波工具-v4-2026-07-29`，
+该归档未随本仓库分发（仓库内不存在此目录）。
 
 DigitalMicrograph、ImageJ、PASAD 等历史材料位于本项目 `legacy/`。它们不属于
 v5 Python 运行时，也不会被打包。详细说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

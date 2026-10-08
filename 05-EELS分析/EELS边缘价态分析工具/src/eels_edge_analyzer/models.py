@@ -55,15 +55,15 @@ class ReferenceSpec:
 
 
 def default_distance_bins() -> tuple[DistanceBin, ...]:
-    """默认的 0–2.2–4.4–6.6–11 nm 表层到内部剖面。"""
+    """代码默认只给单一内部层（不预设任何表层剖分）。
 
-    return (
-        DistanceBin("E1", 0.0, 2.2),
-        DistanceBin("E2", 2.2, 4.4),
-        DistanceBin("E3", 4.4, 6.6),
-        DistanceBin("E4", 6.6, 11.0),
-        DistanceBin("Bulk", 11.0, None),
-    )
+    元素/样品专属的表层到内部距离分层（例如 Cu L2,3 的
+    0–2.2–4.4–6.6–11 nm 剖面）由内置预设 presets/cu_l23.json 提供，
+    不再作为全局默认值——否则换元素/换样品而不改配置时会静默套用
+    与当前样品无关的表面深度分层。
+    """
+
+    return (DistanceBin("Bulk", 0.0, None),)
 
 
 def _check_ordered_pair(values: tuple[float, float], name: str) -> None:
@@ -73,6 +73,146 @@ def _check_ordered_pair(values: tuple[float, float], name: str) -> None:
         raise ValueError(f"{name} 必须是 (低, 高) 二元组。")
     if not float(values[0]) < float(values[1]):
         raise ValueError(f"{name} 的下界必须小于上界（当前 {values[0]:g}, {values[1]:g}）。")
+
+
+# 配对能量轴校验的容差（回归 2026-10-03 R1）。
+#
+# 坐标误差假设：能量轴常以 float32 存储，其表示量子随数值量级线性增长，
+#   q32 = eps(float32) * max|axis|
+# 这是**保守假设**：轴即使已是 float64，仍按 float32 精度估计其坐标不确定度。
+# 注意它同时定义了**支持边界**：当 q32 相对步长过大（见下方 5%/2e-3 上限）时，
+# 高分辨率轴（例如 900 eV 原点、0.001 eV/ch）即使本身是 float64 也会被保守拒绝，
+# 并明确提示坐标精度不足 —— 这是刻意取舍，不是"对高精度数据一定更宽松"。
+# 900 eV 处 q32 ≈ 1.1e-4 eV。
+#
+# 三个约束（缺一不可，否则容差会被无界放大）：
+#   1. 基础相对容差 1e-3 * step —— 判均匀与判色散都用它；
+#   2. 量化容差最多补 2*q32（相邻差分两端各半个量子），但**必须**受
+#      5% * step 的绝对上限约束：若 2*q32 已超过该上限，说明坐标精度不足以
+#      可靠判断，直接拒绝并说明原因，而不是把容差放大到能容纳误差；
+#   3. 色散比较的坐标误差按通道跨度折减：
+#        2*q_low/(n_low-1) + 2*q_high/(n_high-1)
+#      总容差若超过 2e-3 * max(step) 则拒绝"无法可靠比较色散"。
+#
+# 这是**有限支持边界**：不保证每一条高分辨率 float32 轴都被支持（例如
+# 900 eV 原点、0.001 eV/ch 的轴会因精度不足被诚实拒绝），换取的是不放行
+# 3%–20% 这类真实失配。
+_AXIS_STEP_RTOL = 1e-3
+_AXIS_QUANTIZATION_QUANTA = 2.0
+_AXIS_PRECISION_CAP_FRACTION = 0.05
+_DISPERSION_PRECISION_CAP_FRACTION = 2e-3
+
+
+def _axis_precision(axis: np.ndarray) -> float:
+    """按 float32 精度保守估计的坐标量子（eV）。"""
+
+    if axis.size == 0:
+        return 0.0
+    return float(np.finfo(np.float32).eps) * float(np.max(np.abs(axis)))
+
+
+def _axis_step_estimate(axis: np.ndarray) -> float:
+    """用首末两点估计整体步长（对局部跳变稳健，避免 median 的量化台阶）。"""
+
+    return float((axis[-1] - axis[0]) / (axis.size - 1))
+
+
+def validate_single_energy_axis(energy_ev: np.ndarray, role: str) -> float:
+    """校验**单条**能量轴，返回其步长估计（eV/channel）。
+
+    公开接口：低损轴在任何情况下都应满足这些条件，因此也供只处理低损谱的
+    调用方复用（见 ``processing.fourier_ratio_deconvolution``）。
+
+    检查：一维、长度 ≥ 2、全部有限、严格递增，且**自身均匀**。
+    坐标精度不足以判断时明确拒绝，不猜结论；不做任何重采样。
+    """
+
+    axis = np.asarray(energy_ev, dtype=float)
+    if axis.ndim != 1:
+        raise ValueError(f"{role}的能量轴必须是一维数组，当前维度为 {axis.ndim}。")
+    if axis.size < 2:
+        raise ValueError(
+            f"{role}的能量轴只有 {axis.size} 个通道，无法确定能量色散。")
+    if not bool(np.all(np.isfinite(axis))):
+        raise ValueError(f"{role}的能量轴包含非有限值（NaN/Inf），无法用于配对。")
+    if not bool(np.all(np.diff(axis) > 0)):
+        raise ValueError(
+            f"{role}的能量轴不是严格递增（{axis[0]:g}–{axis[-1]:g} eV）；"
+            "v1 只支持能量轴单调递增的 DM3/DM4，请检查数据对象是否选对。")
+
+    step = _axis_step_estimate(axis)
+    quantum = _axis_precision(axis)
+    quantization = _AXIS_QUANTIZATION_QUANTA * quantum
+    if quantization > _AXIS_PRECISION_CAP_FRACTION * step:
+        raise ValueError(
+            f"{role}的能量轴坐标精度不足以可靠判断采样是否均匀"
+            f"（|E| 最大 {np.max(np.abs(axis)):.6g} eV，float32 坐标量子约 "
+            f"{quantum:.3g} eV，步长仅 {step:.3g} eV）。请从原始能量标定重新生成"
+            "足够精度的等间距坐标（保留物理能量标定，不要为绕开该检查而改动"
+            "能量原点——拟合窗口按绝对 eV 定义）。")
+
+    tolerance = max(quantization, _AXIS_STEP_RTOL * step)
+    steps = np.diff(axis)
+    worst = float(np.max(np.abs(steps - step)))
+    if worst > tolerance:
+        raise ValueError(
+            f"{role}的能量轴采样不均匀（步长约 {step:.6g} eV，"
+            f"最大偏差 {worst:.3g} eV，容差 {tolerance:.3g} eV）。"
+            "Fourier-ratio 的逐通道配对要求均匀能量栅格；请重新导出为等间距能量轴。")
+    return step
+
+
+def validate_paired_energy_axes(
+    low_energy_ev: "np.ndarray",
+    high_energy_ev: "np.ndarray",
+) -> None:
+    """校验低损/高损能量轴可逐通道配对（通道数与色散）。
+
+    回归 2026-10-03 R1：此前管线只校验形状与"轴递增"，低损 0.25 eV/ch 与高损
+    1.00 eV/ch 的配对会静默在错误 4 倍的频率尺度上做复散射校正，使**高损去卷积
+    结果与依赖它的后续拟合**不可靠，而报告仍正常产出。
+
+    要求：一维、通道数一致、长度 ≥ 2；两条轴各自全部有限、严格递增、自身均匀；
+    两条轴的**色散**在容差内一致（容差构成见本模块顶部注释）。
+
+    **不比较能量原点**：低损含 ZLP、高损从吸收边附近开始，两者窗口起点本就
+    不同，只要色散（binning）一致即可配对。
+
+    不做重采样：色散不一致必须由调用方重新导出配对数据。
+
+    Raises:
+        ValueError: 通道数不一致、轴形状/取值非法、坐标精度不足以判断、
+            采样不均匀，或色散不一致。
+    """
+
+    low = np.asarray(low_energy_ev, dtype=float)
+    high = np.asarray(high_energy_ev, dtype=float)
+    if low.size != high.size:
+        raise ValueError(
+            f"低损与高损的能量通道数不一致（{low.size} vs {high.size}），"
+            "无法逐通道配对做 Fourier-ratio 校正。")
+    low_step = validate_single_energy_axis(low, "低损对象")
+    high_step = validate_single_energy_axis(high, "高损对象")
+
+    # 步长由端点估计；每个端点的量子误差被 (n-1) 个间隔摊薄。
+    estimated_error = (
+        _AXIS_QUANTIZATION_QUANTA * _axis_precision(low) / (low.size - 1)
+        + _AXIS_QUANTIZATION_QUANTA * _axis_precision(high) / (high.size - 1)
+    )
+    scale = max(abs(low_step), abs(high_step))
+    tolerance = _AXIS_STEP_RTOL * scale + estimated_error
+    if tolerance > _DISPERSION_PRECISION_CAP_FRACTION * scale:
+        raise ValueError(
+            f"能量轴坐标精度不足以可靠比较色散（容差 {tolerance:.3g} eV/ch 已超过"
+            f"步长 {scale:.3g} eV/ch 的 {_DISPERSION_PRECISION_CAP_FRACTION:g} 倍）。"
+            "请从原始能量标定重新生成足够精度的等间距坐标。")
+    if abs(low_step - high_step) > tolerance:
+        raise ValueError(
+            f"低损与高损能量色散不一致（{low_step:.6g} vs {high_step:.6g} eV/ch，"
+            f"容差 {tolerance:.3g}）。Fourier-ratio 复散射校正要求两者配对到同一"
+            "能量栅格（相同 binning、各自均匀）；请重新导出配对数据。")
+
+
 
 
 @dataclass
@@ -112,7 +252,7 @@ class AnalysisConfig:
     distance_bins: tuple[DistanceBin, ...] = field(default_factory=default_distance_bins)
     bootstrap_resamples: int = 500
     bootstrap_block_columns: int = 5
-    random_seed: int = 20260820
+    random_seed: int = 42
 
     run_sensitivity: bool = True
     sensitivity_regularizations: tuple[float, ...] = (0.001, 0.003, 0.01)
@@ -132,7 +272,8 @@ class AnalysisConfig:
         0.90,
     )
     injection_residual_block_channels: int = 5
-    along_surface_segment_nm: float = 11.0
+    # 与样品/预设绑定，不设数值默认：Cu L2,3 预设提供 11.0 nm。
+    along_surface_segment_nm: float | None = None
 
     qc_min_r2: float = 0.50
     qc_min_snr: float = 3.0
@@ -193,6 +334,11 @@ class AnalysisConfig:
             raise ValueError("表面搜索深度至少为 2 个像素。")
         if self.surface_orientation not in {"auto", "top", "bottom", "left", "right"}:
             raise ValueError(f"未知样品表面方向: {self.surface_orientation}")
+        if self.along_surface_segment_nm is None:
+            raise ValueError(
+                "沿表面分段宽度必须显式提供（nm）：请使用参数预设"
+                "（内置 Cu L2,3 预设为 11.0）或经 CLI/GUI 显式设置，"
+                "该值与样品/预设的距离分层绑定，不设全局默认。")
         if self.along_surface_segment_nm <= 0:
             raise ValueError("沿表面分段宽度必须为正。")
         if self.injection_simulations < 0:

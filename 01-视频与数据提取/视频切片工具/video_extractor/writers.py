@@ -114,7 +114,9 @@ class StackWriter:
     def _metadata(self) -> dict[str, object]:
         # 'ImageJ' 键被 tifffile 用作描述串中的版本标记，不会出现在键值行里
         metadata: dict[str, object] = {"ImageJ": IMAGEJ_VERSION, "axes": _axes(self.spec)}
-        if self.interval_s is not None:
+        # interval_s <= 0（如两帧 PTS 相同被算出的 0 间隔）不可作为固定帧
+        # 间隔写入：既会除零，也不是真实的时间轴信息
+        if self.interval_s is not None and self.interval_s > 0:
             metadata.update(
                 {"finterval": float(self.interval_s), "fps": 1.0 / float(self.interval_s)}
             )

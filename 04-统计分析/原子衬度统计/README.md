@@ -11,11 +11,14 @@
 
 ## 直接运行
 
-```text
-dist/TIF图像衬度分析工具v2.5.0.exe
+本仓库不含构建产物（无 `dist/` 目录）。需要 exe 请用项目内环境自行打包：
+
+```powershell
+.venv\Scripts\python -m pip install pyinstaller
+.venv\Scripts\python -m PyInstaller 衬度分析v2.spec
 ```
 
-（v2.5.0 打包版本号自动取自 `contrast_core.__version__`；v2.4.0 及更早版本已归档到 `<仓库根>\08-历史版本\旧版exe\`。）
+（v2.5.0 打包版本号自动取自 `contrast_core.__version__`；v2.4.0 及更早版本的旧 exe 归档在开发机的 `<仓库根>\08-历史版本\旧版exe\`，该归档未随本仓库分发。）
 
 **打包产物自检**（换机器后确认 exe 可用，不弹任何对话框，隐藏窗口跑完"加载 → 分析 → 导出"全链路并写日志）：
 
@@ -110,7 +113,7 @@ python .\smoke_test_gui.py
 - `smoke_test_gui.py`：GUI 冒烟/回归脚本（含加载失败回滚、多帧解析、取消、CSV 结构等用例）。
 - `requirements.txt`：运行与测试依赖（版本锁定）。
 - `衬度分析v2.spec`：PyInstaller 配置（排除非 TkAgg 后端与 pandas 以控制体积）。
-- `dist/`：打包产物。
+- `dist/`：打包产物目录，未随仓库分发，需用上述 spec 自行构建。
 
 ## 更新记录
 
@@ -152,7 +155,7 @@ python .\smoke_test_gui.py
 - 无压缩 TIFF 在加载期间保持内存映射，会持续占用文件句柄（Windows 下该文件在程序中打开期间无法被移动/删除）。
 - 3D 数据 axes 含 Z（层析/系列切片堆栈）时会按"帧序"处理并在日志提示；若切片间不是时间演化关系，请谨慎解读跨帧统计。
 
-<!-- README-QUICKREF:BEGIN 由 tools/gen-readme-block.py 生成，请勿手工编辑本区块 -->
+<!-- README-QUICKREF:BEGIN 本区块为手工维护，需与版本来源（pyproject.toml / 代码 __version__，见「版本来源」行）保持一致 -->
 
 ---
 

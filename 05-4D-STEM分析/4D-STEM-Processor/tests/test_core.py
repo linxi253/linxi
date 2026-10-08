@@ -39,17 +39,100 @@ def make_synthetic_datacube(scan=16, det=24, alpha=5, shift=(1.5, -1.0),
 
 
 def test_dm4_dtype_mapping():
-    assert np.dtype(dm4_io.numpy_dtype_from_code(2)) == np.dtype('<i2')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(4)) == np.dtype('<u2')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(6)) == np.dtype('<f4')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(7)) == np.dtype('<f8')
-    assert np.dtype(dm4_io.numpy_dtype_from_code(10)) == np.dtype('u1')
+    # DM4 *image dataType* semantics, i.e. ncempy dm.py _DM2NPDataTypes /
+    # Gatan dm4io.h GatanDataType — NOT the tag-level encoded-type table.
+    expected = {
+        1: '<i2', 2: '<f4', 3: '<c8', 6: '<u1', 7: '<i4', 9: '<i1',
+        10: '<u2', 11: '<u4', 12: '<f8', 13: '<c16',
+    }
+    assert set(dm4_io.DM4_DTYPES) == set(expected)
+    for code, dtype_str in expected.items():
+        assert np.dtype(dm4_io.numpy_dtype_from_code(code)) == np.dtype(dtype_str)
+
+
+def test_dm4_dtype_mapping_rejects_encoded_type_table():
+    # Regression lock on the old bug: the table used to be ncempy's
+    # tag-level _EncodedTypeDTypes, under which image dataType 2 (float32)
+    # was decoded as int16 and dataType 10 (uint16) as uint8. Codes 4/5/8
+    # exist only in that tag-level table, while 1/13 exist only in the
+    # correct image table — either signature returning means the wrong
+    # table came back.
+    import pytest
+    assert np.dtype(dm4_io.numpy_dtype_from_code(2)) == np.dtype('<f4')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(10)) == np.dtype('<u2')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(1)) == np.dtype('<i2')
+    assert np.dtype(dm4_io.numpy_dtype_from_code(13)) == np.dtype('<c16')
+    for legacy_tag_code in (4, 5, 8):
+        with pytest.raises(RuntimeError):
+            dm4_io.numpy_dtype_from_code(legacy_tag_code)
 
 
 def test_dm4_dtype_mapping_rejects_unknown():
     import pytest
     with pytest.raises(RuntimeError):
         dm4_io.numpy_dtype_from_code(999)
+
+
+def test_declared_data_bytes_reads_ncempy_data_size():
+    # declared_data_bytes() mirrors ncempy's fileDM.dataSize semantics:
+    # the byte count the DM tag tree declares for a data block, or None
+    # when it cannot be determined.
+    class _Stub:
+        dataSize = [np.uint64(48), None, 'not-a-number']
+
+    assert dm4_io.declared_data_bytes(_Stub(), 0) == 48
+    assert dm4_io.declared_data_bytes(_Stub(), 1) is None
+    assert dm4_io.declared_data_bytes(_Stub(), 2) is None
+    assert dm4_io.declared_data_bytes(_Stub(), 7) is None   # out of range
+    assert dm4_io.declared_data_bytes(object(), 0) is None  # attribute absent
+
+
+def _fake_filedm(declared_bytes):
+    import io
+
+    class _FakeFileDM:
+        def __init__(self):
+            self.numObjects = 1
+            self.dataShape = [4]
+            self.dataType = [2]      # float32 per the image dataType table
+            self.xSize = [4]
+            self.ySize = [4]
+            self.zSize = [16]
+            self.zSize2 = [16]
+            self.dataOffset = [64]
+            self.dataSize = [declared_bytes]
+            self.scale = [1.0, 1.0, 1.0, 1.0]
+            self.scaleUnit = ['nm', 'nm', 'mrad', 'mrad']
+            self.fid = io.BytesIO()
+
+    return _FakeFileDM()
+
+
+def test_read_dm4_metadata_checks_declared_byte_count(tmp_path, monkeypatch):
+    # The dataType code -> itemsize mapping must agree with the byte count
+    # the tag tree declares for the Data blob. The old wrong table decoded
+    # dataType 2 (float32, 4 bytes/element) as int16 (2 bytes/element),
+    # which passes any file-size bound check but silently corrupts every
+    # value; the exact-equality check must fail loudly instead.
+    import types
+
+    import pytest
+
+    path = tmp_path / 'synthetic.dm4'
+    path.write_bytes(b'\x00' * (64 + 4 * 4 * 16 * 16 * 4))
+
+    consistent = _fake_filedm(4 * 4 * 16 * 16 * 4)   # float32: 4 B/element
+    monkeypatch.setattr(dm4_io, '_ncempy_dm',
+                        types.SimpleNamespace(fileDM=lambda _p: consistent))
+    meta = dm4_io.read_dm4_metadata(str(path))
+    assert meta['dtype'] == np.dtype('<f4')
+    assert meta['dtype_name'] == 'float32'
+
+    mismatched = _fake_filedm(4 * 4 * 16 * 16 * 2)   # old-table signature
+    monkeypatch.setattr(dm4_io, '_ncempy_dm',
+                        types.SimpleNamespace(fileDM=lambda _p: mismatched))
+    with pytest.raises(RuntimeError, match='declares'):
+        dm4_io.read_dm4_metadata(str(path))
 
 
 def test_preprocess_preserves_bf_disk():
@@ -191,31 +274,42 @@ def test_ssb_reconstruct_runs_and_saves_shapes():
 def test_ssb_recovers_synthetic_phase():
     # End-to-end accuracy lock: SSB must recover the phase of the synthetic
     # forward model in core.ssb_core (crude Gaussian-probe kinematics, so the
-    # absolute correlation ceiling is limited; ~0.50 is the deterministic
-    # baseline for this configuration). Guards against sign flips, mirroring
-    # and gross regressions such as a reintroduced aperture wrap-around.
+    # absolute correlation ceiling is limited). Guards against sign flips,
+    # mirroring and gross regressions such as a reintroduced aperture
+    # wrap-around.
+    #
+    # Geometry: generate_4dstem_fast fftshifts every diffraction pattern so
+    # the DC (beam centre) sits at the array centre — the same point the
+    # `center` argument below assumes. The reconstruction returns the
+    # conjugate (sign-flipped) phase of this toy forward model, so the ground
+    # truth enters the correlation negated. With the fftshift reverted (DC at
+    # [0,0], beam centre off `center`) the correlation collapses or flips sign
+    # and both assertions below fail; the second, narrower-aperture
+    # configuration concentrates the diffraction spectrum around the DC and
+    # is the more beam-centre-sensitive of the two (pre-fix corr ~ -0.25 vs
+    # post-fix ~ +0.63 in the negated convention).
     from core.ssb_core import generate_4dstem_fast
-
-    scan, det, alpha = 24, 48, 8
-    datacube, obj, _ = generate_4dstem_fast((scan, scan), (det, det), alpha,
-                                            defocus_rad=0.0)
-    center = (det / 2.0, det / 2.0)
-    result = ssb_reconstruct(datacube, alpha_pixels=alpha, center=center,
-                             verbose=False)
-    assert result['cancelled'] is False
-
-    rec_phase = np.angle(result['complex_obj'])
-    true_phase = np.angle(obj)
 
     def corr(a, b):
         a = a.ravel() - a.mean()
         b = b.ravel() - b.mean()
         return float(a @ b / np.sqrt((a @ a) * (b @ b)))
 
-    c_direct = corr(rec_phase, true_phase)
-    c_flipped = corr(rec_phase, np.flip(true_phase))
-    assert c_direct > 0.3
-    assert c_direct > c_flipped
+    for scan, det, alpha, floor in ((24, 48, 8, 0.3), (24, 48, 4, 0.4)):
+        datacube, obj, _ = generate_4dstem_fast((scan, scan), (det, det), alpha,
+                                                defocus_rad=0.0)
+        center = (det / 2.0, det / 2.0)
+        result = ssb_reconstruct(datacube, alpha_pixels=alpha, center=center,
+                                 verbose=False)
+        assert result['cancelled'] is False
+
+        rec_phase = np.angle(result['complex_obj'])
+        true_phase = -np.angle(obj)  # conjugate-convention ground truth
+
+        c_direct = corr(rec_phase, true_phase)
+        c_flipped = corr(rec_phase, np.flip(true_phase))
+        assert c_direct > floor, (scan, det, alpha, c_direct)
+        assert c_direct > c_flipped, (scan, det, alpha, c_direct, c_flipped)
 
 
 def test_ssb_cancellation():

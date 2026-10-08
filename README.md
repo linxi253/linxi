@@ -28,7 +28,7 @@
 | 统计分析 | TIF 原子衬度统计 | 2.5.0 | `04-统计分析/原子衬度统计` | `tif图像衬度分析工具.py` |
 | 统计分析 | HAADF-STEM 特征区域演化 | 2026.09.2 | `04-统计分析/特征区域演化分析` | `应力面积统计.py` |
 | 统计分析 | TIFF 面积测量 | — | `04-统计分析/统计面积` | `统计面积.py` |
-| 统计分析 | 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计/pythonProject` | `main.py` |
+| 统计分析 | 晶体/非晶区域统计 | 5.3 | `04-统计分析/非晶面积统计` | `main.py` |
 | 4D-STEM | 4D-STEM Processor | 2.2.0 | `05-4D-STEM分析/4D-STEM-Processor` | `stem_processor_gui.py` |
 | EELS 谱学 | EELS 边缘价态分析 | 0.2.0 | `05-EELS分析/EELS边缘价态分析工具` | `run.py` |
 | HRTEM 模拟 | HRTEM 高分辨模拟工具（tem_sim 引擎） | 1.2.0 | `09-HRTEM模拟` | `run.bat` |
@@ -51,7 +51,12 @@
 - [10-DSH集成](10-DSH集成/README.md)：DeepSeek Harness 会话内的 TEM 视频流水线。
 - [全整合](全整合/README.md)：TEM Suite 集成层源码（工具树 + 标签页）。
 
-> 编号说明：`05-` 有两个目录（4D-STEM 与 EELS）系历史遗留，为避免破坏各工具内部的相对引用，未做重排。
+> 编号说明：编号反映各目录加入工作区的先后顺序，且**不连续**——`07`、`08` 两个号从未创建
+> （`08-历史版本` 在部分旧文档中指本仓库之外的本机归档，仓库内并不存在该目录）。
+> `05-` 有两个目录（4D-STEM 与 EELS）系历史遗留，为避免破坏各工具内部的相对引用，未做重排。
+> `010-STEM模拟` 用三位数编号，是「第 10 组」的历史写法：它在字典序上会排在 `01-` 与 `02-`
+> 之间，语义上与 `10-DSH集成` 无关（前者是 STEM 模拟引擎，后者是 TEM 视频流水线）；
+> 为兼容 全整合/temsuite/registry.py、.tools、本 CI 等处硬编码路径，暂不改名。
 
 ## 通用运行方式
 
@@ -73,7 +78,7 @@ python -m venv .venv
 .venv\Scripts\python <入口脚本.py>
 ```
 
-`09-HRTEM模拟`、`010-STEM模拟`、`原子识别纯算法` 提供 `run.bat`，双击即可。
+`09-HRTEM模拟`、`010-STEM模拟` 提供 `run.bat`，`原子识别纯算法` 提供 `启动原子识别工具.bat`，双击即可。
 
 带 `.spec` 文件的项目可用 PyInstaller 在**项目内构建环境**中重新打包：
 
@@ -102,8 +107,17 @@ python -m venv .venv
 [JJPPeters/Strainpp](https://github.com/JJPPeters/Strainpp)，该目录自带 `LICENSE`）。
 GPL-3.0 具传染性：若把它与其余代码打包成**单一作品**分发，整体授权需按 GPL-3.0
 重新审视；仅在同一仓库中并列存放、各自独立分发则不受影响。
+`全整合`（TEM Suite）在运行期以**同进程 `import`** 方式加载 strainpp，
+若两者一起打进同一个 exe 对外分发，请先确认 GPL 合规性。
 
-逐工具的许可证、第三方依赖、以及**未收录的第三方材料**清单见
+**例外：发行 exe 中的 GPL-3.0 第三方组件。** `05-EELS分析/EELS边缘价态分析工具`
+与 `全整合` 的发行 exe 均内含 **`ncempy`（GPL-3.0-or-later）**，
+分发时该组件仍受 GPL-3.0 约束，不因本项目声明 MIT 而改变；
+两者的 `THIRD_PARTY_NOTICES.md` 列明了义务与规避方式。
+另 `09-HRTEM模拟`、`010-STEM模拟` 的 `data/peng_high.json` 取自
+**abTEM（GPL-3.0）**。
+
+逐工具的许可证、第三方依赖、数据文件来源、以及**未收录的第三方材料**清单见
 [NOTICE.md](NOTICE.md)。
 
 ## 引用与贡献

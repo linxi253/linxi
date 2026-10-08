@@ -1,0 +1,33 @@
+{
+  "_readme": [
+    "审计 35：未发表实验的指标、验收阈值与测试集代号不写入公开仓库。",
+    "把本文件复制为同目录的 experiment_records.json（已被 .gitignore 排除），",
+    "在持有数据与训练记录的机器上填入真实数值，各脚本的对应小节如下。",
+    "null 占位必须替换为真实值后脚本才会运行。"
+  ],
+  "evaluate_round2_candidates": {
+    "floors": {
+      "4": {"tp": null, "fp": null, "fn": null},
+      "5": {"tp": null, "fp": null, "fn": null}
+    },
+    "guardrails": {
+      "val_f1_min": null,
+      "train_f1_min": null,
+      "val_f1_baseline": null,
+      "train_f1_baseline": null,
+      "min_region_recall_baseline": {"train": null, "val": null},
+      "min_region_recall_drop_limit": null
+    }
+  },
+  "write_reviewed_95_deliverables": {
+    "previous_round_reference": {
+      "train_f1": null,
+      "val_f1": null
+    }
+  },
+  "audit_training_update_inputs": {
+    "zip_sources": {
+      "<本地标签，可脱敏>": "<zip 路径：绝对路径，或相对 原子标注 目录的相对路径>"
+    }
+  }
+}

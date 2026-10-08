@@ -1,0 +1,29 @@
+# Reproducible runtime lock resolved in a clean venv. Do not hand-edit.
+#
+# 生成法（portable）：新建空 venv → pip install -r requirements.txt（项目目录内原样传入）
+#   → pip freeze（滤掉 pip/setuptools/wheel）→ pip check 必须通过。
+# 平台：CPython 3.12.14 / Windows AMD64（两上游 requires-python 交集 >=3.11,<3.13）。
+# 来源（本锁版本依据，均为仓库内文件）：
+#   01-视频与数据提取/视频切片工具/requirements.lock
+#       numpy==2.2.6、tifffile==2025.5.10、imageio-ffmpeg==0.6.0
+#   02-图像处理/drift-correction-v7/requirements.lock
+#       numpy==2.2.6、opencv-python==5.0.0.93、matplotlib==3.10.9、tifffile==2025.5.10
+#   交集 numpy==2.2.6、tifffile==2025.5.10；其余按所属上游锁定值取。
+#   本锁不声称与上游逐项一致（上一版曾误称，已更正）。
+# 复现：python -m venv .venv; .venv\Scripts\python -X utf8 -m pip install -r requirements.lock.txt
+# 只含运行依赖：不含 PyInstaller 与 pytest。
+
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.66.1
+imageio-ffmpeg==0.6.0
+kiwisolver==1.5.1
+matplotlib==3.10.9
+numpy==2.2.6
+opencv-python==5.0.0.93
+packaging==26.3
+pillow==12.3.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+six==1.17.0
+tifffile==2025.5.10

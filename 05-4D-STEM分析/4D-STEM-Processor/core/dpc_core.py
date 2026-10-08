@@ -351,7 +351,11 @@ def run_dpc_pipeline(datacube, alpha_pixels, center=None, rotation_deg=0,
         np.save(os.path.join(outdir, f'{label}_com_y.npy'), com_result['com_y'])
         np.save(os.path.join(outdir, f'{label}_com_x.npy'), com_result['com_x'])
         
-        with open(os.path.join(outdir, f'{label}_dpc_meta.json'), 'w') as f:
+        # 文本模式 open 必须显式 encoding：中文 Windows 默认 cp936，会把
+        # ensure_ascii=False 的中文/符号 label 写成 GBK 或直接抛
+        # UnicodeEncodeError。
+        with open(os.path.join(outdir, f'{label}_dpc_meta.json'), 'w',
+                  encoding='utf-8') as f:
             json.dump(result['metadata'], f, indent=2, default=str,
                       ensure_ascii=False)
         

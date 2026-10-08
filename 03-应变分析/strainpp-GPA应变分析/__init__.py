@@ -10,7 +10,7 @@ Core modules:
     phase       - Single g-vector phase analysis (masking, unwrapping, differentiation)
     gpa         - GPA controller (two g-vectors, tensor calculation, g-vector detection)
     dm_reader   - DM3/DM4 (Gatan DigitalMicrograph) file reader
-    strain_analysis - Command-line entry point, TIFF I/O, full pipeline
+    cli         - Command-line entry point, TIFF I/O, full pipeline
 """
 
 try:

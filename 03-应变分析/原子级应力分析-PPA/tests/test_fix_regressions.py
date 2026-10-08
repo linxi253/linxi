@@ -11,6 +11,7 @@
   - ppa_stats 可选列按表头名解析 (列序无关)
   - utf-8-sig (带 BOM) CSV 双向兼容
   - semi_auto_label 背景自适应阈值对暗原子的公平性
+  - 自动检测 worker 强制主线程快照 use_preprocessed (工单75, Tk 非线程安全)
 """
 from __future__ import annotations
 
@@ -21,6 +22,16 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 
 # ---------------------------------------------------------------- ppa.py --
@@ -88,6 +99,54 @@ class DetectAppendAfterEditTests(unittest.TestCase):
                                    "askyesnocancel", return_value=None):
                 app._finish_auto_detect([(10.0, 10.0)])
             self.assertEqual(app.points, [(5.0, 5.0)])
+        finally:
+            root.destroy()
+
+
+class DetectWorkerTkSnapshotTests(unittest.TestCase):
+    """工单75: worker 线程内不得读 tk 变量, use_preprocessed 必须为主线程快照。
+
+    本组用例锁定修复后的完整形态：_detect_peaks 在主线程完成快照、
+    worker 以普通数值形参接收（此前两者都直接读 tk 变量）。
+    """
+
+    def _make_app(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        root.withdraw()
+        import ppa
+        app = ppa.AtomMarkerApp(root)
+        app.image = np.zeros((50, 50), dtype=np.float64)
+        app.image_path = "synthetic.tif"
+        return root, app
+
+    def test_use_preprocessed_is_required_positional(self):
+        root, app = self._make_app()
+        try:
+            # 快照参数必填: 缺参在调用层即 TypeError, 不再可能经 None 分支
+            # 在 worker 线程现场读 tk 变量 (Tk 非线程安全)
+            with self.assertRaises(TypeError):
+                app._detect_peaks_worker(4, 0.0, 5, None, True)
+        finally:
+            root.destroy()
+
+    def test_worker_uses_snapshot_not_tk_var(self):
+        root, app = self._make_app()
+        try:
+            # 快照 False → 用原图 (全零图无峰)
+            app.processed_image = None
+            pts, stats = app._detect_peaks_worker(4, 0.0, 5, None, True, False)
+            self.assertEqual(pts, [])
+            self.assertIsNone(stats)
+            # 快照 True → 用预处理图 (单点亮斑), 与 use_preprocessed tk 变量无关
+            proc = np.zeros((50, 50), dtype=np.float64)
+            proc[25, 25] = 1.0
+            app.processed_image = proc
+            pts2, _ = app._detect_peaks_worker(4, 0.0, 5, None, True, True)
+            self.assertEqual(pts2, [(25.0, 25.0)])
         finally:
             root.destroy()
 
@@ -310,6 +369,151 @@ class BackgroundThresholdTests(unittest.TestCase):
         dist = [np.hypot(x - dim_x, y - dim_y) for x, y in points]
         self.assertTrue(min(dist) < 1.0 if dist else False,
                         f"暗原子 (低 Z 列) 必须被检出; 最近检测距离 {min(dist) if dist else None}")
+
+
+class _Widget:
+    """最小 Tk 控件替身（只实现 status.config）。"""
+
+    def config(self, **kwargs):
+        return None
+
+    configure = config
+
+
+class _InlineThread:
+    """同步执行 target 的 Thread 替身（用于捕获 worker 参数）。"""
+
+    def __init__(self, *, target, **kwargs):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+class LatticeConditionThresholdChainTests(unittest.TestCase):
+    """晶格条件数阈值必须贯穿整条调用链（回归 2026-10-03）。
+
+    参考晶格校验、参考区基矢精化、晶格索引分配、局部 PPA 与参考加载必须使用
+    **同一个**用户阈值。此前只有参考校验处可传阈值，其余仍回落硬编码 30，
+    用户放宽后会在后续步骤被静默挡下。
+    """
+
+    def setUp(self):
+        import ppa as ppa_module
+        from ppa_core.strain import LATTICE_CONDITION_GUIDANCE
+        self.ppa = ppa_module
+        self.guidance = LATTICE_CONDITION_GUIDANCE
+        indices = np.array([(i, j) for i in range(3) for j in range(3)])
+        self.indices = indices
+        # 条件数 40 的基矢：默认 30 拒绝，放宽到 50 通过
+        self.ref = indices @ np.diag([40.0, 1.0])
+        self.cond = 40.0
+        self.a_vec = np.array([40.0, 0.0])
+        self.b_vec = np.array([0.0, 1.0])
+
+    def test_default_stays_30(self):
+        """默认阈值必须保持历史行为（general=30）。"""
+        from ppa_core.strain import validate_reference_lattice
+        self.assertEqual(self.guidance["general"], 30.0)
+        # cond=40 > 30 → 默认必须拒绝（这是历史行为，不能被"合并"放宽）
+        with self.assertRaises(Exception):
+            validate_reference_lattice([40, 0], [0, 1])
+        # 合法基矢在默认阈值下正常通过，返回值是条件数
+        self.assertAlmostEqual(validate_reference_lattice([10, 0], [0, 10]), 1.0)
+
+    def test_reference_and_local_share_custom_threshold(self):
+        """cond=40 的基矢：阈值 50 时参考校验与局部 PPA 都必须通过。"""
+        from ppa_core.strain import (compute_local_peak_pair_strain,
+                                     validate_reference_lattice)
+        self.assertAlmostEqual(
+            validate_reference_lattice([40, 0], [0, 1], max_condition=50.0), self.cond)
+        result = compute_local_peak_pair_strain(
+            self.indices, self.ref, self.ref, max_condition=50.0)
+        self.assertTrue(np.any(result.quality_mask),
+                        "放宽阈值后局部 PPA 不应把全部站点判为无效")
+
+    def test_assign_unique_lattice_indices_accepts_threshold(self):
+        """索引分配此前隐藏使用默认 30，放宽后必须能通过。"""
+        points = self.ref.copy()
+        assignment = self.ppa.assign_unique_lattice_indices(
+            points, np.zeros(2), self.a_vec, self.b_vec, max_condition=50.0)
+        self.assertEqual(len(assignment.lattice_indices), len(points))
+
+    def test_refine_region_accepts_threshold(self):
+        """参考区精化内部的索引分配也必须使用同一阈值。"""
+        points = self.ref.copy()
+        mask = np.ones(len(points), dtype=bool)
+        out = self.ppa.refine_lattice_basis_in_region(
+            points, np.zeros(2), self.a_vec, self.b_vec, mask,
+            min_atoms=3, max_condition=50.0)
+        self.assertEqual(len(out), 5)
+
+    def test_estimate_chains_accepts_threshold(self):
+        """双原子列估计也必须接受同一阈值。"""
+        a_points = np.stack([np.array([40.0 * k, 0.0]) for k in range(4)])
+        b_points = np.stack([np.array([0.0, 1.0 * k]) for k in range(4)])
+        a_fit, b_fit = self.ppa.estimate_reference_vectors_from_chains(
+            a_points, b_points, min_points=3, max_condition=50.0)
+        self.assertIsNotNone(a_fit.vector)
+        self.assertIsNotNone(b_fit.vector)
+
+    def test_threshold_validation_rejects_non_finite_and_non_positive(self):
+        """NaN/inf/0/负值必须在任何计算前明确拒绝。"""
+        from ppa_core.strain import (compute_local_peak_pair_strain,
+                                     validate_max_condition,
+                                     validate_reference_lattice)
+        for bad in (float("nan"), float("inf"), float("-inf"), 0.0, -1.0, "x", None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(Exception):
+                    validate_max_condition(bad)
+                with self.assertRaises(Exception):
+                    validate_reference_lattice([40, 0], [0, 1], max_condition=bad)
+                with self.assertRaises(Exception):
+                    compute_local_peak_pair_strain(
+                        self.indices, self.ref, self.ref, max_condition=bad)
+
+    def _bare_app(self, threshold):
+        """构造只含 run_ppa_analysis 所需字段的实例（不跑 __init__/Tk）。"""
+        app = self.ppa.AtomMarkerApp.__new__(self.ppa.AtomMarkerApp)
+        app.image = np.zeros((128, 128), dtype=np.float32)
+        app.points = [tuple(row) for row in self.ref]
+        app.reference_vecs = (self.a_vec, self.b_vec)
+        app.ref_origin = np.array([0.0, 0.0])
+        app.lattice_max_condition = threshold
+        app.von_mises_coeff = 4.0 / 9.0
+        app.analysis_method = "peak_pairs"
+        app._job_generation = 0
+        app.status = _Widget()
+        app.root = type("Root", (), {"update_idletasks": staticmethod(lambda: None)})()
+        app._atoms_in_ref_region_mask = lambda: None
+        app._clear_analysis_results = lambda: None
+        app._ensure_worker_polling = lambda: None
+        return app
+
+    def test_gui_worker_receives_snapshot_threshold(self):
+        """run_ppa_analysis 派发给 worker 的阈值必须等于配置值（不回落默认）。"""
+        app = self._bare_app(50.0)
+        dispatched = []
+        app._ppa_analysis_worker = lambda **kwargs: dispatched.append(kwargs)
+        with mock.patch.object(self.ppa.threading, "Thread", _InlineThread), \
+                mock.patch.object(self.ppa.messagebox, "showerror") as err:
+            app.run_ppa_analysis()
+        self.assertEqual(len(dispatched), 1, f"worker 未派发: {err.call_args_list}")
+        self.assertEqual(dispatched[0]["lattice_max_condition"], 50.0)
+
+    def test_gui_analysis_rejects_invalid_threshold_before_any_work(self):
+        """非法阈值必须在派发 worker 之前报错（不得进入计算）。"""
+        app = self._bare_app(30.0)
+        dispatched = []
+        app._ppa_analysis_worker = lambda **kwargs: dispatched.append(kwargs)
+        for bad in (float("nan"), float("inf"), 0.0, -1.0):
+            with self.subTest(bad=bad):
+                dispatched.clear()
+                app.lattice_max_condition = bad
+                with mock.patch.object(self.ppa.messagebox, "showerror") as err:
+                    app.run_ppa_analysis()
+                self.assertEqual(dispatched, [], f"非法阈值 {bad} 仍派发了 worker")
+                self.assertTrue(err.called, f"非法阈值 {bad} 未提示")
 
 
 if __name__ == "__main__":

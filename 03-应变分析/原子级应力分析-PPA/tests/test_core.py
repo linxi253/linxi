@@ -29,10 +29,25 @@ from ppa_stats import (
     load_strain_csv,
     weighted_mean_std,
 )
-from atom_detector.model_security import ModelVerificationError, load_allowlist, verify_model
+from atom_detector.model_security import (
+    ModelVerificationError,
+    load_allowlist,
+    register_allow,
+    verify_model,
+)
 from ppa_core.image_io import ImageLoadError, load_analysis_image
 from ppa_core.project_store import ProjectValidationError, load_project, save_project
 from ppa_core.strain import AnalysisError, compute_cst_strain, compute_local_peak_pair_strain
+
+import sys  # noqa: E402
+# Windows 中文控制台/重定向（GBK/cp936）环境下，print 中文、✓ 等字符会触发 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 
 
 def square_grid(size: int = 5) -> np.ndarray:
@@ -590,7 +605,9 @@ class DisplayConventionTests(unittest.TestCase):
         }
         strain_grid, strain_grid_gl, extent = ppa._interpolate_strain_grids(
             fields, image_shape=(400, 400), grid_size=15)
-        self.assertEqual(extent, (0, 399, 0, 399))
+        # 工单74: 云图 extent 以像素边缘为界 (-0.5 ~ N-0.5), 与底图默认 extent
+        # 的像素盒对齐; 原先的 (0, N-1) 会让云图相对底图错位达半个网格。
+        self.assertEqual(extent, (-0.5, 399.5, -0.5, 399.5))
         # 凸包外保持 NaN 是设计行为; 只比较凸包内的有效格点
         valid = ~np.isnan(strain_grid['xx'])
 
@@ -763,6 +780,47 @@ class ModelSecurityTests(unittest.TestCase):
             allowlist.write_text(
                 f'{{"sha256": ["{digest}"]}}', encoding="utf-8")
             self.assertEqual(verify_model(model, allowlist), digest)
+
+    def test_rejection_message_does_not_hand_out_allow_command(self):
+        # 工单78: 报错文案不得把可直接复制执行的加白命令作为标准修复步骤呈现
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = Path(temp_dir) / "model.pt"
+            model.write_bytes(b"fake torch weights")
+            allowlist = Path(temp_dir) / "allowlist.json"
+            allowlist.write_text('{"sha256": []}', encoding="utf-8")
+            with self.assertRaises(ModelVerificationError) as ctx:
+                verify_model(model, allowlist)
+            self.assertNotIn("--allow", str(ctx.exception))
+
+    def test_register_allow_records_source_and_timestamp(self):
+        # 工单78: 加白必须留痕(来源+时间戳), 不再只登记裸哈希; 重复登记幂等
+        import json
+        with tempfile.TemporaryDirectory() as temp_dir:
+            allowlist = Path(temp_dir) / "allowlist.json"
+            digest = "a" * 64
+            record = register_allow(digest, "unit-test: https://example.invalid/weights", allowlist)
+            self.assertEqual(record["sha256"], digest)
+            self.assertEqual(record["source"], "unit-test: https://example.invalid/weights")
+            self.assertTrue(record["added_at"])
+            data = json.loads(allowlist.read_text(encoding="utf-8"))
+            self.assertEqual(data["sha256"], [digest])
+            self.assertEqual(data["records"], [record])
+            # 已登记的摘要再次加白: 不重复追加
+            self.assertIsNone(register_allow(digest, "again", allowlist))
+            self.assertEqual(json.loads(allowlist.read_text(encoding="utf-8"))["sha256"],
+                             [digest])
+
+    def test_register_allow_works_on_legacy_allowlist_without_records(self):
+        # 工单78: 旧格式(无 records 键)的白名单文件也能安全登记
+        import json
+        with tempfile.TemporaryDirectory() as temp_dir:
+            allowlist = Path(temp_dir) / "allowlist.json"
+            allowlist.write_text('{"sha256": []}', encoding="utf-8")
+            digest = "b" * 64
+            record = register_allow(digest, "legacy", allowlist)
+            data = json.loads(allowlist.read_text(encoding="utf-8"))
+            self.assertEqual(data["records"], [record])
+            self.assertEqual(data["sha256"], [digest])
 
 
 class PersistenceAndImageTests(unittest.TestCase):

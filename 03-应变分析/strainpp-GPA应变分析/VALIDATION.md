@@ -25,16 +25,16 @@ Python 安装包和 Windows 可执行文件。
 
 只读检查目录：
 
-`D:\data\20260713`
+`<本机数据目录>`（开发机上的一次性验收数据，未随仓库分发，目录名含采集日期，此处不列出）
 
 主要文件：
 
-- `0080 HAADF.tif`：1024×1024 RGB uint8；
-- `0080 HAADFgrey.tif`：1024×1024 灰度 uint8；
-- `ABSF Filtered 0080 HAADFgrey.tif`：2048×2048 调色板 TIFF；
+- `<样品> HAADF.tif`：1024×1024 RGB uint8；
+- `<样品> HAADFgrey.tif`：1024×1024 灰度 uint8；
+- `ABSF Filtered <样品> HAADFgrey.tif`：2048×2048 调色板 TIFF；
 - 原有 `OUTPUT`：RGB 预览图，不是可继续定量计算的浮点场。
 
-读取器得到的 `0080 HAADF.tif` 灰度结果与 `0080 HAADFgrey.tif` 一致。
+读取器得到的 `<样品> HAADF.tif` 灰度结果与 `<样品> HAADFgrey.tif` 一致。
 原文件没有可读取的物理像素标定标签。
 
 ## 推荐起始参数
@@ -43,7 +43,7 @@ Python 安装包和 Windows 可执行文件。
 FFT 和选峰：
 
 ```powershell
-strainpp-gpa "D:\data\20260713\0080 HAADFgrey.tif" `
+strainpp-gpa "<本机数据目录>\<样品> HAADFgrey.tif" `
   --crop 0 0 1024 920 `
   --pixel-size 0.025252525 `
   --g1 96 27 --g2 96 -15 --sigma1 6.5 --sigma2 6.5 `

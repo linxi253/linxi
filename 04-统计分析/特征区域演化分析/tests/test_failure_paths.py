@@ -177,4 +177,11 @@ class TestAnalysisConfigValidation:
             evolution.AnalysisConfig(margin_frac=0.9)
 
     def test_defaults_are_valid(self):
-        evolution.AnalysisConfig()
+        # 仅"构造不抛"不足以守护默认值：合法但错误的漂移（如 margin_frac
+        # 0.05→0.45）不会触发 __post_init__ 报错，这里对关键字段默认值
+        # 直接断言预期区间/数值。
+        cfg = evolution.AnalysisConfig()
+        assert cfg.dpi > 0
+        assert 0 < cfg.margin_frac < 0.5
+        assert cfg.min_size >= 1 and cfg.n_bg_frames >= 1
+        assert cfg.z95 == pytest.approx(1.96)
