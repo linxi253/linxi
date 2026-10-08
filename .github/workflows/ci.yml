@@ -76,6 +76,15 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: windows-latest
+    # Windows 默认 stdout 编码是 cp1252（charmap）。仓库里多处工具会打印含中文的
+    # 路径/目录名（例如 ci-project.py 打印 entry['dir']、verify_ffmpeg_asset.py
+    # 打印资产目录），父进程自身在 cp1252 下 print 就会 UnicodeEncodeError。
+    # 在 job 级设置这两个变量，使该 job 的**所有** Python 父/子进程都拿到确定的
+    # UTF-8 stdout；子进程另有 _envcommon 的 setdefault 兜底，二者一致。
+    # 这不是逐机 monkeypatch，也不改变任何安装/测试/校验行为。
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
     strategy:
       fail-fast: false
       matrix:

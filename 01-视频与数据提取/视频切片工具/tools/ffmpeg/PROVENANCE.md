@@ -13,7 +13,7 @@
 - 发布页：https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-01-13-06
 - 归档：`ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-shared-8.1.zip`
 - 归档 SHA-256：`bf545d8fee9bb6957c1f3dea0f384bf64edead407d763326dbbd2de1b04768a4`
-  - 2026-10-08 用固定标签归档复核：**归档整体 SHA-256 与 2026-10-02 记录的`a8fbc540…` 不同**（打包/归档层面有差异），但**解包后 9 个运行时文件（`ffmpeg.exe`、`ffprobe.exe` 与 7 个 DLL）的 SHA-256 与已验收构建**逐一相同**，见 `.review-tmp` 证据 `ffmpeg-tag-binary-check.json` 与 `ffmpeg-runtime-accepted.json`。
+  - 2026-10-08 用固定标签归档复核：**归档整体 SHA-256 与 2026-10-02 记录的 `a8fbc540…` 不同**（打包/归档层面有差异），但**解包后 9 个运行时文件（`ffmpeg.exe`、`ffprobe.exe` 与 7 个 DLL）的 SHA-256 与已验收构建逐一相同**，见 `.review-tmp` 证据 `ffmpeg-tag-binary-check.json` 与 `ffmpeg-runtime-accepted.json`。
   - 归档中还含 `ffplay.exe`，本项目**明确不分发**该文件，故逐文件比对时它标记为不匹配属预期，不是 9 个运行时文件的差异。
 - 上游 FFmpeg commit：`330caae0c1`
 
